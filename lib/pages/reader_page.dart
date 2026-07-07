@@ -57,12 +57,12 @@ class _ReaderPageState extends State<ReaderPage> {
   Future<void> _init() async {
     _settings = await _settingsService.load();
     // 把设置里的参数灌进 TTS 引擎
-    _tts.wordGapSeconds = _settings.wordGapSeconds;
+    _tts.speechRate = _settings.speechRate;
     _tts.repeatCount = _settings.repeatCount;
     _tts.dictationGapSeconds = _settings.dictationGapSeconds;
     _tts.loop = _settings.loop;
     await _tts.init();
-    _tts.setText(_doc.content);
+    _tts.setText(_doc.content); // 默认常规模式切句
     if (mounted) setState(() {});
   }
 
@@ -103,8 +103,14 @@ class _ReaderPageState extends State<ReaderPage> {
 
   Future<void> _stop() => _tts.stop();
 
-  void _toggleDictation(bool v) {
-    setState(() => _tts.dictationMode = v);
+  Future<void> _toggleDictation(bool v) async {
+    await _tts.stop();
+    setState(() {
+      // 切换模式需按新模式重新切分文本
+      _tts.setModeAndText(v, _doc.content);
+      _currentToken = -1;
+      _tokenKeys.clear();
+    });
   }
 
   // ---------------- 翻译 ----------------
@@ -321,12 +327,12 @@ class _ReaderPageState extends State<ReaderPage> {
                 Switch(value: dictation, onChanged: _toggleDictation),
               ],
             ),
-            // 间隔滑块:普通模式=词间间隔;听写模式=词间停顿
+            // 常规模式:语速滑块;听写模式:书写停顿滑块
             Row(
               children: [
-                const Icon(Icons.more_horiz, size: 20),
+                Icon(dictation ? Icons.more_horiz : Icons.speed, size: 20),
                 const SizedBox(width: 8),
-                Text(dictation ? '书写停顿' : '词间间隔'),
+                Text(dictation ? '书写停顿' : '语速'),
                 Expanded(
                   child: dictation
                       ? Slider(
@@ -340,13 +346,13 @@ class _ReaderPageState extends State<ReaderPage> {
                               setState(() => _tts.dictationGapSeconds = v),
                         )
                       : Slider(
-                          value: _tts.wordGapSeconds.clamp(0.0, 2.0),
-                          min: 0.0,
-                          max: 2.0,
-                          divisions: 20,
-                          label: '${_tts.wordGapSeconds.toStringAsFixed(1)}s',
+                          value: _tts.speechRate.clamp(0.1, 1.0),
+                          min: 0.1,
+                          max: 1.0,
+                          divisions: 9,
+                          label: '${(_tts.speechRate * 100).round()}%',
                           onChanged: (v) =>
-                              setState(() => _tts.wordGapSeconds = v),
+                              setState(() => _tts.setSpeechRate(v)),
                         ),
                 ),
               ],

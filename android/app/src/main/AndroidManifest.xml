@@ -36,11 +36,6 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-
-        <!-- ML Kit 文字识别模型自动下载 -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr" />
     </application>
 
     <!-- 声明查询 TTS 引擎(Android 11+ 需要) -->

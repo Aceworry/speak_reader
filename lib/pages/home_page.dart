@@ -5,8 +5,10 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/document.dart';
 import '../services/ocr_service.dart';
+import '../services/vision_ocr_service.dart';
 import '../services/import_service.dart';
 import '../services/storage_service.dart';
+import '../services/settings_service.dart';
 import '../widgets/import_sheet.dart';
 import 'reader_page.dart';
 import 'settings_page.dart';
@@ -21,7 +23,9 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _storage = StorageService();
   final _ocr = OcrService();
+  final _visionOcr = VisionOcrService();
   final _import = ImportService();
+  final _settingsService = SettingsService();
   final _picker = ImagePicker();
 
   List<Document> _docs = [];
@@ -96,7 +100,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> _runOcr(String path, DocSource source) async {
     _setLoading(true);
     try {
-      final text = await _ocr.recognizeFile(path);
+      final settings = await _settingsService.load();
+      final String text;
+      if (settings.ocrMode == OcrMode.vision) {
+        text = await _visionOcr.recognizeFile(path, settings: settings);
+      } else {
+        text = await _ocr.recognizeFile(path);
+      }
       if (text.trim().isEmpty) {
         _toast('未识别到文字,请换一张更清晰的图片');
         return;

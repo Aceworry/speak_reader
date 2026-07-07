@@ -57,6 +57,17 @@ jobs:
       - name: 获取依赖
         run: flutter pub get
 
+      - name: 下载 Tesseract 训练数据(中文简体 + 英文)
+        run: |
+          mkdir -p assets/tessdata
+          echo "下载 chi_sim.traineddata ..."
+          curl -fL --retry 3 -o assets/tessdata/chi_sim.traineddata \
+            https://github.com/tesseract-ocr/tessdata/raw/main/chi_sim.traineddata
+          echo "下载 eng.traineddata ..."
+          curl -fL --retry 3 -o assets/tessdata/eng.traineddata \
+            https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata
+          ls -lh assets/tessdata/
+
       - name: 修补插件 compileSdk 到 36(直接改 pub 缓存里的插件)
         run: |
           CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
