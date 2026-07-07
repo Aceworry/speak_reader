@@ -27,11 +27,14 @@ jobs:
       - name: 补齐脚手架文件(图标/wrapper/gradle 等)
         run: flutter create --org com.example --project-name speak_reader --platforms=android .
 
-      - name: 还原自定义配置(仅依赖、权限与业务代码)
+      - name: 还原自定义配置(依赖、权限、业务代码、app 构建配置)
         run: |
           git checkout -- pubspec.yaml \
             android/app/src/main/AndroidManifest.xml \
+            android/app/build.gradle.kts \
             lib
+          # 删除可能并存的 Groovy 版 app build 文件,确保用我们的 .kts
+          rm -f android/app/build.gradle 2>/dev/null || true
           rm -f test/widget_test.dart 2>/dev/null || true
 
       - name: 获取依赖
