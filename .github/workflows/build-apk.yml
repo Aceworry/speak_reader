@@ -37,12 +37,22 @@ jobs:
       - name: 调整 app 构建配置(compileSdk 36 + 关闭混淆)
         run: |
           F=android/app/build.gradle.kts
-          # 把 compileSdk 提到 36(file_picker 等依赖要求)
-          sed -i 's/compileSdk = .*/compileSdk = 36/' "$F"
-          # 在 release 块的签名配置后关闭 R8 混淆与资源压缩(避免 ML Kit 类缺失)
-          sed -i '/signingConfig = signingConfigs.getByName("debug")/a\            isMinifyEnabled = false\n            isShrinkResources = false' "$F"
-          echo "===== 修改后的 build.gradle.kts ====="
+          echo "===== 原始 build.gradle.kts ====="
           cat "$F"
+          # 宽松匹配 compileSdk 的多种写法(= 34 / = flutter.compileSdkVersion / 函数式)
+          sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[A-Za-z0-9._()]+/compileSdk = 36/' "$F"
+          sed -i -E 's/compileSdkVersion[[:space:]]*\([^)]*\)/compileSdk = 36/' "$F"
+          # 关闭 R8 混淆与资源压缩(避免 ML Kit 类缺失);已存在则不重复插入
+          grep -q "isMinifyEnabled" "$F" || \
+            sed -i '/signingConfig = signingConfigs.getByName("debug")/a\            isMinifyEnabled = false\n            isShrinkResources = false' "$F"
+          echo "===== 修改后 build.gradle.kts ====="
+          cat "$F"
+          echo "===== 校验 compileSdk ====="
+          if grep -qE "compileSdk[[:space:]]*=[[:space:]]*36" "$F"; then
+            echo "OK: compileSdk 已设为 36"
+          else
+            echo "错误: 未能把 compileSdk 设为 36" ; grep -n compileSdk "$F" ; exit 1
+          fi
 
       - name: 获取依赖
         run: flutter pub get
