@@ -9,6 +9,7 @@ import '../services/import_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/import_sheet.dart';
 import 'reader_page.dart';
+import 'settings_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -66,7 +67,9 @@ class _HomePageState extends State<HomePage> {
     try {
       final XFile? shot = await _picker.pickImage(
         source: ImageSource.camera,
-        imageQuality: 90,
+        imageQuality: 85,
+        maxWidth: 2200,
+        maxHeight: 2200,
       );
       if (shot == null) return;
       await _runOcr(shot.path, DocSource.camera);
@@ -79,7 +82,9 @@ class _HomePageState extends State<HomePage> {
     try {
       final XFile? img = await _picker.pickImage(
         source: ImageSource.gallery,
-        imageQuality: 90,
+        imageQuality: 85,
+        maxWidth: 2200,
+        maxHeight: 2200,
       );
       if (img == null) return;
       await _runOcr(img.path, DocSource.gallery);
@@ -214,6 +219,16 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('语音朗读'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: '设置',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsPage()),
+            ),
+          ),
+        ],
       ),
       body: Stack(
         children: [

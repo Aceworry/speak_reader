@@ -47,11 +47,22 @@ class ImportService {
 
   Future<String> _readPdf(File file) async {
     final bytes = await file.readAsBytes();
-    final PdfDocument document = PdfDocument(inputBytes: bytes);
+    PdfDocument document;
+    try {
+      document = PdfDocument(inputBytes: bytes);
+    } catch (e) {
+      throw Exception('无法打开该 PDF:$e');
+    }
     try {
       final extractor = PdfTextExtractor(document);
-      final text = extractor.extractText();
-      return text.trim();
+      final text = extractor.extractText().trim();
+      if (text.isEmpty) {
+        // 扫描件/图片版 PDF 没有文本层,提取不到文字
+        throw Exception(
+            '该 PDF 可能是扫描件(图片版),没有可提取的文字层。\n'
+            '建议:把 PDF 页面截图后用「拍照/相册」导入做文字识别。');
+      }
+      return text;
     } finally {
       document.dispose();
     }

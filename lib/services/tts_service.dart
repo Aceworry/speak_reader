@@ -5,186 +5,197 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 朗读状态
 enum TtsState { stopped, playing, paused }
 
-/// 语音朗读服务:封装 flutter_tts,支持分句朗读与当前句回调。
+/// 语音朗读服务(逐词朗读版)。
 ///
-/// 采用"逐句朗读"策略:把全文按标点切分成句子队列,
-/// 每句朗读完成后自动推进下一句,并通过 [onSentenceChanged] 回调
-/// 当前句索引,便于 UI 高亮。这样即使系统 TTS 不支持字级进度,
-/// 也能实现句级高亮与暂停/继续。
+/// 设计要点:
+/// - 把文本切成 **token(词/短语)** 序列:英文按单词、中文按标点/短块。
+/// - **逐个** speak,token 之间插入可调 [wordGapSeconds] 停顿。
+///   → "变慢"靠拉长词间停顿实现,单词本身语速保持自然,不被压缩失真。
+/// - **听写模式**:每个词连读 [repeatCount] 遍,词间用更长的 [dictationGapSeconds]
+///   停顿(留给听写者书写),整篇可 [loop] 循环。
+/// - 通过 [onTokenChanged] 回调当前 token 索引,供 UI 高亮。
 class TtsService {
   final FlutterTts _tts = FlutterTts();
 
-  List<String> _sentences = [];
+  List<String> _tokens = [];
   int _currentIndex = 0;
   TtsState _state = TtsState.stopped;
 
-  double _rate = 0.5; // 语速 0.0~1.0
-  double _pitch = 1.0; // 音调 0.5~2.0
+  // 播放代次:每次 stop/pause 自增,用于取消正在进行的播放循环
+  int _playToken = 0;
 
-  /// 当前朗读句子索引变化(-1 表示无)
-  void Function(int index)? onSentenceChanged;
+  // 朗读参数(可运行时调整,下一个 token 生效)
+  double wordGapSeconds = 0.3; // 普通模式词间间隔
+  int repeatCount = 2; // 听写:每词重复遍数
+  double dictationGapSeconds = 2.0; // 听写:词间停顿
+  bool dictationMode = false; // 是否听写模式
+  bool loop = false; // 整篇循环
 
-  /// 朗读状态变化
+  final double _repeatGapSeconds = 0.6; // 同一词多遍之间的短停顿
+
+  /// 当前朗读 token 索引变化(-1 表示无)
+  void Function(int index)? onTokenChanged;
   void Function(TtsState state)? onStateChanged;
-
-  /// 全部朗读完成
   VoidCallback? onComplete;
 
   TtsState get state => _state;
   int get currentIndex => _currentIndex;
-  double get rate => _rate;
-  double get pitch => _pitch;
-  List<String> get sentences => List.unmodifiable(_sentences);
+  List<String> get tokens => List.unmodifiable(_tokens);
 
   bool _initialized = false;
 
-  /// 初始化引擎与回调
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
 
     await _tts.setLanguage('zh-CN');
-    await _tts.setSpeechRate(_rate);
-    await _tts.setPitch(_pitch);
+    await _tts.setSpeechRate(0.5); // 自然语速,固定;调速交给词间间隔
+    await _tts.setPitch(1.0);
     await _tts.setVolume(1.0);
-    // iOS/部分平台:等待朗读结束再返回,保证 completion 时序
-    await _tts.awaitSpeakCompletion(true);
-
-    _tts.setCompletionHandler(() {
-      // 一句读完 → 读下一句
-      if (_state == TtsState.playing) {
-        _currentIndex++;
-        _speakCurrent();
-      }
-    });
-
-    _tts.setCancelHandler(() {
-      _setState(TtsState.stopped);
-    });
+    await _tts.awaitSpeakCompletion(true); // speak 等到读完再返回
 
     _tts.setErrorHandler((msg) {
       debugPrint('TTS error: $msg');
-      _setState(TtsState.stopped);
     });
   }
 
-  /// 把整段文本切成句子队列
+  /// 设置文本并切分为 token
   void setText(String text) {
-    _sentences = _splitSentences(text);
+    _tokens = _tokenize(text);
     _currentIndex = 0;
   }
 
-  /// 按中英文标点切句,保留合理长度
-  List<String> _splitSentences(String text) {
-    final normalized = text.replaceAll('\r\n', '\n');
-    // 在句末标点后插入分隔标记
-    final withMarks = normalized.replaceAllMapped(
-      RegExp(r'([。！？!?；;\n])'),
-      (m) => '${m[1]}',
+  /// 分词:英文按单词,中文按标点/短块,其余符号单独成块。
+  List<String> _tokenize(String text) {
+    final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return [];
+
+    final tokens = <String>[];
+    // 英文词(含数字、连字符、撇号) | 连续中文 | 其它可读符号
+    final re = RegExp(
+      r"[A-Za-z0-9][A-Za-z0-9'’\-]*"
+      r"|[一-鿿]+"
+      r"|[^\sA-Za-z0-9一-鿿]+",
     );
-    final rawParts = withMarks.split('');
-
-    final result = <String>[];
-    for (var part in rawParts) {
-      final s = part.trim();
-      if (s.isEmpty) continue;
-      // 过长的句子(无标点长段)再按逗号/长度二次切分,避免一句太长
-      if (s.length > 120) {
-        result.addAll(_splitLong(s));
+    for (final m in re.allMatches(normalized)) {
+      final t = m.group(0)!;
+      final isCjk = RegExp(r'[一-鿿]').hasMatch(t);
+      if (isCjk) {
+        // 中文长串按标点或每 4 字切成短块,避免一次读太长
+        tokens.addAll(_splitCjk(t));
       } else {
-        result.add(s);
+        final trimmed = t.trim();
+        if (trimmed.isNotEmpty) tokens.add(trimmed);
       }
     }
-    return result.isEmpty ? [text.trim()] : result;
+    return tokens;
   }
 
-  List<String> _splitLong(String s) {
-    final parts = <String>[];
-    final byComma = s.split(RegExp(r'(?<=[,,、])'));
-    var buffer = '';
-    for (final seg in byComma) {
-      if ((buffer + seg).length > 120 && buffer.isNotEmpty) {
-        parts.add(buffer);
-        buffer = seg;
+  List<String> _splitCjk(String s) {
+    final out = <String>[];
+    final byPunc = s.split(RegExp(r'(?<=[。!?！?,,、;;:：])'));
+    for (var seg in byPunc) {
+      seg = seg.trim();
+      if (seg.isEmpty) continue;
+      if (seg.length <= 6) {
+        out.add(seg);
       } else {
-        buffer += seg;
+        for (var i = 0; i < seg.length; i += 4) {
+          out.add(seg.substring(i, i + 4 > seg.length ? seg.length : i + 4));
+        }
       }
     }
-    if (buffer.trim().isNotEmpty) parts.add(buffer);
-    return parts;
+    return out;
   }
 
-  /// 从头或从暂停处开始朗读
+  // ---------------- 播放控制 ----------------
+
   Future<void> play() async {
     await init();
-    if (_sentences.isEmpty) return;
-    if (_currentIndex >= _sentences.length) _currentIndex = 0;
+    if (_tokens.isEmpty) return;
+    if (_currentIndex >= _tokens.length) _currentIndex = 0;
     _setState(TtsState.playing);
-    await _speakCurrent();
+    _runLoop();
   }
 
-  /// 从指定句开始朗读(点击某句)
   Future<void> playFrom(int index) async {
     await init();
-    if (index < 0 || index >= _sentences.length) return;
+    if (index < 0 || index >= _tokens.length) return;
+    _playToken++; // 取消现有循环
     await _tts.stop();
     _currentIndex = index;
     _setState(TtsState.playing);
-    await _speakCurrent();
+    _runLoop();
   }
 
-  Future<void> _speakCurrent() async {
-    if (_currentIndex >= _sentences.length) {
-      _setState(TtsState.stopped);
-      _currentIndex = 0;
-      onSentenceChanged?.call(-1);
-      onComplete?.call();
-      return;
-    }
-    onSentenceChanged?.call(_currentIndex);
-    await _tts.speak(_sentences[_currentIndex]);
-  }
-
-  /// 暂停(记住当前句,下次从本句重读)
   Future<void> pause() async {
     if (_state != TtsState.playing) return;
+    _playToken++; // 取消循环
     _setState(TtsState.paused);
     await _tts.stop();
   }
 
-  /// 继续
   Future<void> resume() async {
     if (_state != TtsState.paused) return;
     _setState(TtsState.playing);
-    await _speakCurrent();
+    _runLoop();
   }
 
-  /// 停止并回到开头
   Future<void> stop() async {
+    _playToken++;
     _setState(TtsState.stopped);
     await _tts.stop();
     _currentIndex = 0;
-    onSentenceChanged?.call(-1);
+    onTokenChanged?.call(-1);
   }
 
-  Future<void> setRate(double rate) async {
-    _rate = rate.clamp(0.0, 1.0);
-    await _tts.setSpeechRate(_rate);
-    // 变更即时生效:若正在播放,重读当前句
-    if (_state == TtsState.playing) {
-      await _tts.stop();
-      await _speakCurrent();
+  /// 核心逐词循环
+  Future<void> _runLoop() async {
+    final myToken = ++_playToken;
+
+    while (_currentIndex < _tokens.length) {
+      if (myToken != _playToken) return; // 被取消
+      onTokenChanged?.call(_currentIndex);
+
+      final reps = dictationMode ? (repeatCount < 1 ? 1 : repeatCount) : 1;
+      for (var r = 0; r < reps; r++) {
+        if (myToken != _playToken) return;
+        await _tts.speak(_tokens[_currentIndex]);
+        if (myToken != _playToken) return;
+        if (r < reps - 1) {
+          await _sleep(_repeatGapSeconds);
+          if (myToken != _playToken) return;
+        }
+      }
+
+      _currentIndex++;
+
+      // 词间间隔:听写模式用更长停顿
+      final gap = dictationMode ? dictationGapSeconds : wordGapSeconds;
+      if (gap > 0) {
+        await _sleep(gap);
+        if (myToken != _playToken) return;
+      }
+
+      // 整篇读完
+      if (_currentIndex >= _tokens.length) {
+        if (loop) {
+          _currentIndex = 0;
+        } else {
+          break;
+        }
+      }
     }
+
+    if (myToken != _playToken) return;
+    _setState(TtsState.stopped);
+    _currentIndex = 0;
+    onTokenChanged?.call(-1);
+    onComplete?.call();
   }
 
-  Future<void> setPitch(double pitch) async {
-    _pitch = pitch.clamp(0.5, 2.0);
-    await _tts.setPitch(_pitch);
-    if (_state == TtsState.playing) {
-      await _tts.stop();
-      await _speakCurrent();
-    }
-  }
+  Future<void> _sleep(double seconds) =>
+      Future.delayed(Duration(milliseconds: (seconds * 1000).round()));
 
   void _setState(TtsState s) {
     _state = s;
@@ -192,6 +203,7 @@ class TtsService {
   }
 
   Future<void> dispose() async {
+    _playToken++;
     await _tts.stop();
   }
 }

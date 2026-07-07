@@ -36,6 +36,9 @@ dependencies:
   # 历史记录本地持久化
   shared_preferences: ^2.3.2
 
+  # 网络请求(翻译 API)
+  http: ^1.2.2
+
 dev_dependencies:
   flutter_lints: ^4.0.0
 
