@@ -1,0 +1,20 @@
+# 编译产物
+build/
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+*.apk
+
+# IDE
+.idea/
+.vscode/
+*.iml

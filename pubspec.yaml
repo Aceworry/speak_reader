@@ -1,0 +1,43 @@
+name: speak_reader
+description: 语音朗读导入 App —— 拍照/扫描/Word/PDF/TXT 导入并语音朗读
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.10.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # 语音朗读(系统内置 TTS)
+  flutter_tts: ^4.0.2
+
+  # 拍照 / 相册取图
+  image_picker: ^1.1.2
+
+  # 离线 OCR(支持中文)
+  google_mlkit_text_recognition: ^0.13.0
+
+  # 选择文件(docx/pdf/txt)
+  file_picker: ^8.1.2
+
+  # Word(.docx)转文本
+  docx_to_text: ^1.0.1
+
+  # PDF 文本提取
+  syncfusion_flutter_pdf: ^27.1.48
+
+  # 运行时权限
+  permission_handler: ^11.3.1
+
+  # 历史记录本地持久化
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
