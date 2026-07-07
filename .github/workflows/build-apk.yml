@@ -54,6 +54,41 @@ jobs:
             echo "错误: 未能把 compileSdk 设为 36" ; grep -n compileSdk "$F" ; exit 1
           fi
 
+      - name: 强制所有插件子模块使用 compileSdk 36
+        run: |
+          # file_picker 等插件在自身构建文件里写死了 compileSdk 34,
+          # 需在项目级 gradle 用 subprojects 统一覆盖为 36。
+          if [ -f android/build.gradle.kts ]; then
+            cat >> android/build.gradle.kts <<'EOF'
+
+subprojects {
+    afterEvaluate {
+        val androidExt = extensions.findByName("android")
+        if (androidExt is com.android.build.gradle.BaseExtension) {
+            androidExt.compileSdkVersion(36)
+        }
+    }
+}
+EOF
+            echo "已向 android/build.gradle.kts 追加 subprojects 覆盖"
+          elif [ -f android/build.gradle ]; then
+            cat >> android/build.gradle <<'EOF'
+
+subprojects {
+    afterEvaluate { p ->
+        if (p.hasProperty("android")) {
+            p.android {
+                compileSdkVersion 36
+            }
+        }
+    }
+}
+EOF
+            echo "已向 android/build.gradle 追加 subprojects 覆盖"
+          else
+            echo "错误: 未找到项目级 gradle 文件" ; ls android ; exit 1
+          fi
+
       - name: 获取依赖
         run: flutter pub get
 
