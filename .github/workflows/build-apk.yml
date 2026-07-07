@@ -57,8 +57,11 @@ jobs:
       - name: 强制所有插件子模块使用 compileSdk 36
         run: |
           if [ -f android/build.gradle.kts ]; then
+            echo "===== 原始 android/build.gradle.kts ====="
+            cat android/build.gradle.kts
             cat ci/override.gradle.kts >> android/build.gradle.kts
-            echo "已向 android/build.gradle.kts 追加覆盖"
+            echo "===== 追加后 android/build.gradle.kts ====="
+            cat android/build.gradle.kts
           elif [ -f android/build.gradle ]; then
             cat ci/override.gradle >> android/build.gradle
             echo "已向 android/build.gradle 追加覆盖"

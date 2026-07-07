@@ -1,11 +1,15 @@
 
 // 由 CI 追加:强制所有插件子模块使用 compileSdk 36
-// file_picker 等插件在自身构建文件里写死了旧版本,需在此统一覆盖。
+// 用插件加载钩子而非 afterEvaluate,避免"项目已评估"的时机错误。
 subprojects {
-    afterEvaluate {
-        val androidExt = extensions.findByName("android")
-        if (androidExt is com.android.build.gradle.BaseExtension) {
-            androidExt.compileSdkVersion(36)
+    plugins.withId("com.android.library") {
+        extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+            compileSdk = 36
+        }
+    }
+    plugins.withId("com.android.application") {
+        extensions.configure<com.android.build.gradle.AppExtension>("android") {
+            compileSdkVersion(36)
         }
     }
 }
