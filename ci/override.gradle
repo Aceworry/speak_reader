@@ -1,0 +1,11 @@
+
+// 由 CI 追加:强制所有插件子模块使用 compileSdk 36(Groovy 版)
+subprojects {
+    afterEvaluate { p ->
+        if (p.hasProperty("android")) {
+            p.android {
+                compileSdkVersion 36
+            }
+        }
+    }
+}
