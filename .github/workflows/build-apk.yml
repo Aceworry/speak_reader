@@ -54,23 +54,31 @@ jobs:
             echo "错误: 未能把 compileSdk 设为 36" ; grep -n compileSdk "$F" ; exit 1
           fi
 
-      - name: 强制所有插件子模块使用 compileSdk 36
-        run: |
-          if [ -f android/build.gradle.kts ]; then
-            echo "===== 原始 android/build.gradle.kts ====="
-            cat android/build.gradle.kts
-            cat ci/override.gradle.kts >> android/build.gradle.kts
-            echo "===== 追加后 android/build.gradle.kts ====="
-            cat android/build.gradle.kts
-          elif [ -f android/build.gradle ]; then
-            cat ci/override.gradle >> android/build.gradle
-            echo "已向 android/build.gradle 追加覆盖"
-          else
-            echo "错误: 未找到项目级 gradle 文件" ; ls android ; exit 1
-          fi
-
       - name: 获取依赖
         run: flutter pub get
+
+      - name: 修补插件 compileSdk 到 36(直接改 pub 缓存里的插件)
+        run: |
+          CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
+          echo "pub 缓存目录: $CACHE"
+          patched=0
+          # 遍历所有插件的 android 构建文件(.gradle 与 .gradle.kts),
+          # 把写死的 compileSdk 30~35 统一提升到 36。直接改源文件,不受 gradle 评估时机影响。
+          while IFS= read -r -d '' f; do
+            if grep -qE "compileSdk(Version)?[[:space:]=]+.*3[0-5]" "$f"; then
+              echo "----- 修补前: $f -----"
+              grep -nE "compileSdk" "$f" || true
+              sed -i -E \
+                -e 's/(compileSdkVersion[[:space:]]+)3[0-5]/\136/g' \
+                -e 's/(compileSdk[[:space:]]+)3[0-5]/\136/g' \
+                -e 's/(compileSdk[[:space:]]*=[[:space:]]*)3[0-5]/\136/g' \
+                "$f"
+              echo "----- 修补后: $f -----"
+              grep -nE "compileSdk" "$f" || true
+              patched=$((patched+1))
+            fi
+          done < <(find "$CACHE" \( -path "*/android/build.gradle" -o -path "*/android/build.gradle.kts" \) -print0 2>/dev/null)
+          echo "共修补 $patched 个插件构建文件"
 
       - name: 构建 Release APK
         run: flutter build apk --release
