@@ -24,6 +24,20 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: 补齐脚手架文件(图标/wrapper 等)
+        run: flutter create --org com.example --project-name speak_reader --platforms=android .
+
+      - name: 还原自定义配置(找回被覆盖的依赖与权限)
+        run: |
+          git checkout -- pubspec.yaml \
+            android/app/build.gradle \
+            android/build.gradle \
+            android/settings.gradle \
+            android/gradle.properties \
+            android/app/src/main/AndroidManifest.xml \
+            lib
+          rm -f lib/widget_test.dart test/widget_test.dart 2>/dev/null || true
+
       - name: 获取依赖
         run: flutter pub get
 
