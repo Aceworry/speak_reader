@@ -122,30 +122,12 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _sectionTitle('文字识别(OCR)方式'),
-          RadioListTile<OcrMode>(
-            title: const Text('离线识别 (Tesseract)'),
-            subtitle: const Text('不联网、不依赖 Google 服务,适合清晰印刷体'),
-            value: OcrMode.offline,
-            groupValue: _s.ocrMode,
-            contentPadding: EdgeInsets.zero,
-            onChanged: (v) => setState(() => _s.ocrMode = v!),
-          ),
-          RadioListTile<OcrMode>(
-            title: const Text('在线视觉模型'),
-            subtitle: const Text('用下方配置的大模型识别,更准,需模型支持图片(如 gpt-4o、qwen-vl)'),
-            value: OcrMode.vision,
-            groupValue: _s.ocrMode,
-            contentPadding: EdgeInsets.zero,
-            onChanged: (v) => setState(() => _s.ocrMode = v!),
-          ),
-          const Divider(height: 40),
-
-          _sectionTitle('翻译 / 视觉 API(OpenAI 兼容)'),
+          _sectionTitle('翻译 / 图片识别 API(OpenAI 兼容)'),
           const Text(
             '支持 OpenAI / DeepSeek / 通义千问 / 智谱 / Kimi 等。\n'
             '填对方的接口地址(到 /v1 为止)、密钥、模型名。\n'
-            '在线视觉 OCR 也用这里的配置。',
+            '📷 拍照/选图的文字识别用视觉大模型完成,'
+            '请填写支持图片输入的模型(如 gpt-4o、qwen-vl-max、glm-4v)。',
             style: TextStyle(color: Colors.grey, fontSize: 13),
           ),
           const SizedBox(height: 12),

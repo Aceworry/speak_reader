@@ -18,9 +18,6 @@ dependencies:
   # 拍照 / 相册取图
   image_picker: ^1.1.2
 
-  # 离线 OCR(Tesseract,不依赖 Google 服务,国产手机可用)
-  flutter_tesseract_ocr: ^0.4.29
-
   # 选择文件(docx/pdf/txt)
   file_picker: ^8.1.2
 
@@ -44,5 +41,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/tessdata/

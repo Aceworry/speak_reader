@@ -4,7 +4,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/document.dart';
-import '../services/ocr_service.dart';
 import '../services/vision_ocr_service.dart';
 import '../services/import_service.dart';
 import '../services/storage_service.dart';
@@ -22,7 +21,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final _storage = StorageService();
-  final _ocr = OcrService();
   final _visionOcr = VisionOcrService();
   final _import = ImportService();
   final _settingsService = SettingsService();
@@ -39,7 +37,6 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    _ocr.dispose();
     super.dispose();
   }
 
@@ -101,12 +98,11 @@ class _HomePageState extends State<HomePage> {
     _setLoading(true);
     try {
       final settings = await _settingsService.load();
-      final String text;
-      if (settings.ocrMode == OcrMode.vision) {
-        text = await _visionOcr.recognizeFile(path, settings: settings);
-      } else {
-        text = await _ocr.recognizeFile(path);
+      if (!settings.translationReady) {
+        _toast('图片识别需要先到「设置」配置 API(支持视觉的模型,如 gpt-4o、qwen-vl)');
+        return;
       }
+      final text = await _visionOcr.recognizeFile(path, settings: settings);
       if (text.trim().isEmpty) {
         _toast('未识别到文字,请换一张更清晰的图片');
         return;
