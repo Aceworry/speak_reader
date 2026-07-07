@@ -27,15 +27,22 @@ jobs:
       - name: 补齐脚手架文件(图标/wrapper/gradle 等)
         run: flutter create --org com.example --project-name speak_reader --platforms=android .
 
-      - name: 还原自定义配置(依赖、权限、业务代码、app 构建配置)
+      - name: 还原自定义配置(依赖、权限、业务代码)
         run: |
           git checkout -- pubspec.yaml \
             android/app/src/main/AndroidManifest.xml \
-            android/app/build.gradle.kts \
             lib
-          # 删除可能并存的 Groovy 版 app build 文件,确保用我们的 .kts
-          rm -f android/app/build.gradle 2>/dev/null || true
           rm -f test/widget_test.dart 2>/dev/null || true
+
+      - name: 调整 app 构建配置(compileSdk 36 + 关闭混淆)
+        run: |
+          F=android/app/build.gradle.kts
+          # 把 compileSdk 提到 36(file_picker 等依赖要求)
+          sed -i 's/compileSdk = .*/compileSdk = 36/' "$F"
+          # 在 release 块的签名配置后关闭 R8 混淆与资源压缩(避免 ML Kit 类缺失)
+          sed -i '/signingConfig = signingConfigs.getByName("debug")/a\            isMinifyEnabled = false\n            isShrinkResources = false' "$F"
+          echo "===== 修改后的 build.gradle.kts ====="
+          cat "$F"
 
       - name: 获取依赖
         run: flutter pub get
