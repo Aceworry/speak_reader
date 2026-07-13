@@ -23,11 +23,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _loaded = false;
   bool _obscureKey = true;
   bool _testing = false;
-  bool _voicesLoading = true;
-  bool _previewing = false;
   String? _outputDir;
-
-  List<String> _languages = [];
 
   late TextEditingController _baseCtrl;
   late TextEditingController _keyCtrl;
@@ -44,14 +40,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _load() async {
     final s = await _service.load();
-    // 把已保存的音色参数同步给 TTS 引擎,再枚举可用声音
-    _tts.voiceLanguage = s.voiceLanguage;
-    _tts.voiceName = s.voiceName;
-    _tts.pitch = s.pitch;
     _tts.dictationRate = s.dictationRate;
     await _tts.init();
-    await _tts.applyVoiceSettings();
-    _languages = _tts.availableLanguages;
     _audioExport.customDir = s.customOutputDir;
     try {
       _outputDir = await _audioExport.outputDirPath();
@@ -62,7 +52,6 @@ class _SettingsPageState extends State<SettingsPage> {
       _keyCtrl.text = s.apiKey;
       _modelCtrl.text = s.model;
       _loaded = true;
-      _voicesLoading = false;
     });
   }
 
@@ -83,7 +72,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  /// 持久化当前设置(同步文本框内容后保存)。音色/音频即时改动也走这里。
+  /// 持久化当前设置(同步文本框内容后保存)。音频即时改动也走这里。
   Future<void> _persist() async {
     _s.baseUrl = _baseCtrl.text;
     _s.apiKey = _keyCtrl.text;
@@ -94,100 +83,6 @@ class _SettingsPageState extends State<SettingsPage> {
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  String _langLabel(String code) {
-    const map = {
-      'zh-CN': '中文(简体)', 'zh-TW': '中文(繁体)', 'zh-HK': '中文(香港)',
-      'en-US': '美式英语', 'en-GB': '英式英语', 'en-AU': '英语(澳洲)',
-      'en-IN': '英语(印度)', 'en-CA': '英语(加拿大)',
-      'ja-JP': '日语', 'ko-KR': '韩语', 'fr-FR': '法语', 'de-DE': '德语',
-      'es-ES': '西班牙语', 'es-US': '西班牙语(美)', 'ru-RU': '俄语',
-      'it-IT': '意大利语', 'pt-BR': '葡萄牙语(巴西)', 'pt-PT': '葡萄牙语',
-      'th-TH': '泰语', 'vi-VN': '越南语', 'ar-SA': '阿拉伯语', 'hi-IN': '印地语',
-    };
-    if (code.isEmpty) return '系统默认';
-    return map[code] ?? code;
-  }
-
-  List<String> _buildLangItems() {
-    final list = <String>['', ..._languages];
-    if (_s.voiceLanguage.isNotEmpty && !list.contains(_s.voiceLanguage)) {
-      list.add(_s.voiceLanguage);
-    }
-    return list;
-  }
-
-  Future<void> _applyPreset(VoicePreset p) async {
-    final matched = await _tts.applyPreset(p);
-    setState(() {
-      _s.voicePreset = p;
-      _s.voiceLanguage = _tts.voiceLanguage;
-      _s.voiceName = _tts.voiceName;
-      _s.pitch = _tts.pitch;
-    });
-    await _persist();
-    if (!matched && p.gender != 'any') {
-      _toast('未找到明确的${p.gender == 'female' ? '女' : '男'}声,已用默认声音;可在下方列表手动选择');
-    }
-  }
-
-  Future<void> _changeLanguage(String? v) async {
-    if (v == null) return;
-    _tts.voiceLanguage = v;
-    _tts.voiceName = null;
-    await _tts.applyVoiceSettings();
-    setState(() {
-      _s.voiceLanguage = v;
-      _s.voiceName = null;
-      _s.voicePreset = VoicePreset.system;
-    });
-    await _persist();
-  }
-
-  Future<void> _changeVoice(String? v) async {
-    final name = (v == null || v.isEmpty) ? null : v;
-    _tts.voiceName = name;
-    await _tts.applyVoiceSettings();
-    setState(() {
-      _s.voiceName = name;
-      _s.voicePreset = VoicePreset.system;
-    });
-    await _persist();
-  }
-
-  Future<void> _changePitch(double v) async {
-    _tts.pitch = v;
-    await _tts.applyVoiceSettings();
-    setState(() => _s.pitch = v);
-    await _persist();
-  }
-
-  Future<void> _preview() async {
-    if (_previewing) {
-      await _tts.stop();
-      setState(() => _previewing = false);
-      return;
-    }
-    setState(() => _previewing = true);
-    final sample = _s.voiceLanguage.startsWith('en')
-        ? 'Hello, this is a voice preview.'
-        : '你好,这是音色试听示例。';
-    try {
-      await _tts.speakPreview(sample);
-    } catch (_) {}
-    Future.delayed(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _previewing = false);
-    });
-  }
-
-  Future<void> _installVoice() async {
-    try {
-      await _tts.openInstallVoiceData();
-      _toast('已打开系统语音数据安装页,请选择并下载所需语言');
-    } catch (e) {
-      _toast('无法打开安装页:$e');
-    }
   }
 
   Future<void> _pickOutputDir() async {
@@ -334,27 +229,8 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(height: 40),
 
-          // ================= 文字识别 / 翻译方式 =================
-          _sectionTitle('文字识别(OCR)方式'),
-          const Text(
-            '离线识别:完全本地运行、无需联网和 API,识别中英文;\n'
-            '在线视觉模型:调用上面配置的视觉大模型,联网、需 API,识别更准。',
-            style: TextStyle(color: Colors.grey, fontSize: 13),
-          ),
-          const SizedBox(height: 8),
-          for (final m in OcrMode.values)
-            RadioListTile<OcrMode>(
-              title: Text(m.label),
-              value: m,
-              groupValue: _s.ocrMode,
-              contentPadding: EdgeInsets.zero,
-              onChanged: (v) async {
-                if (v == null) return;
-                setState(() => _s.ocrMode = v);
-                await _persist();
-              },
-            ),
-          const SizedBox(height: 8),
+          // ================= 翻译方式 =================
+          _sectionTitle('翻译方式'),
           SwitchListTile(
             title: const Text('优先离线翻译'),
             subtitle: const Text('用设备内 ML Kit 离线翻译(首次需联网下载语言模型);'
@@ -428,114 +304,6 @@ class _SettingsPageState extends State<SettingsPage> {
             style: TextStyle(color: Colors.grey, fontSize: 13),
           ),
           const SizedBox(height: 24),
-
-          // ================= 音色选择 =================
-          const Divider(height: 40),
-          _sectionTitle('音色选择'),
-          const Text(
-            '语言/口音(中文、美式、英式等)引擎可靠支持;\n'
-            '男声/女声取决于手机已安装的 TTS 声音,可在"具体声音"列表选择;\n'
-            '童声通过提高音调模拟。',
-            style: TextStyle(color: Colors.grey, fontSize: 13),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final p in VoicePreset.values)
-                ChoiceChip(
-                  label: Text(p.label),
-                  selected: _s.voicePreset == p,
-                  onSelected: _voicesLoading ? null : (_) => _applyPreset(p),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Icon(Icons.language, size: 20),
-              const SizedBox(width: 8),
-              const Text('语言/口音'),
-              const SizedBox(width: 12),
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  value: _s.voiceLanguage,
-                  decoration: const InputDecoration(
-                      isDense: true, border: OutlineInputBorder()),
-                  items: [
-                    for (final l in _buildLangItems())
-                      DropdownMenuItem(value: l, child: Text(_langLabel(l))),
-                  ],
-                  onChanged: _voicesLoading ? null : _changeLanguage,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Builder(builder: (context) {
-            final voiceItems = _tts.voicesForLanguage(_s.voiceLanguage);
-            // 当前声音若不在该语言下则回退显示"引擎默认",避免下拉断言
-            final current = (_s.voiceName != null &&
-                    voiceItems.any((v) => v.name == _s.voiceName))
-                ? _s.voiceName!
-                : '';
-            return Row(
-              children: [
-                const Icon(Icons.record_voice_over, size: 20),
-                const SizedBox(width: 8),
-                const Text('具体声音'),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: current,
-                    decoration: const InputDecoration(
-                        isDense: true, border: OutlineInputBorder()),
-                    items: [
-                      const DropdownMenuItem<String>(
-                          value: '', child: Text('引擎默认')),
-                      for (final v in voiceItems)
-                        DropdownMenuItem<String>(
-                          value: v.name,
-                          child: Text('${v.name}  (${_langLabel(v.locale)})',
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                    ],
-                    onChanged: _voicesLoading ? null : (v) => _changeVoice(v),
-                  ),
-                ),
-              ],
-            );
-          }),
-          const SizedBox(height: 12),
-          _slider(
-            '音调(越高越接近童声)',
-            _s.pitch,
-            0.5,
-            2.0,
-            (v) => _changePitch(v),
-            '×${_s.pitch.toStringAsFixed(1)}',
-          ),
-          Row(
-            children: [
-              TextButton.icon(
-                onPressed: _installVoice,
-                icon: const Icon(Icons.download),
-                label: const Text('下载更多声音'),
-              ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _voicesLoading ? null : _preview,
-                icon: Icon(_previewing ? Icons.stop : Icons.play_arrow),
-                label: Text(_previewing ? '停止试听' : '试听当前音色'),
-              ),
-            ],
-          ),
-          const Text(
-            '缺少中文/英文声音的手机:点"下载更多声音"跳转系统设置安装(安卓限制,'
-            '声音包由系统 TTS 引擎管理,App 无法内置)。',
-            style: TextStyle(color: Colors.grey, fontSize: 12),
-          ),
 
           // ================= 音频导出 =================
           const Divider(height: 40),

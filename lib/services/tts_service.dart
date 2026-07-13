@@ -1,21 +1,9 @@
 import 'dart:io' show File;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:android_intent_plus/android_intent.dart';
-import 'settings_service.dart';
 
 /// 朗读状态
 enum TtsState { stopped, playing, paused }
-
-/// 系统可用的一个声音(来自引擎 getVoices)。
-class VoiceInfo {
-  final String name;
-  final String locale;
-  VoiceInfo(this.name, this.locale);
-
-  @override
-  String toString() => '$name ($locale)';
-}
 
 /// 语音朗读服务:支持两种模式。
 ///
@@ -26,6 +14,7 @@ class VoiceInfo {
 ///   词间留 [dictationGapSeconds] 书写停顿,可整篇循环。
 ///
 /// 两种模式共用一套 token 列表 [tokens] 与索引高亮机制。
+/// 音色使用系统默认(音色选择功能已移除)。
 class TtsService {
   final FlutterTts _tts = FlutterTts();
 
@@ -48,13 +37,6 @@ class TtsService {
   double repeatGapSeconds = 0.6; // 同一词多遍重复之间的间隔(可配置)
   bool loop = false;
 
-  // 音色参数
-  String voiceLanguage = 'zh-CN'; // '' = 系统默认
-  String? voiceName; // null = 引擎默认声音
-  double pitch = 1.0; // 0.5~2.0
-  List<VoiceInfo> availableVoices = [];
-  List<String> availableLanguages = [];
-
   void Function(int index)? onTokenChanged;
   void Function(TtsState state)? onStateChanged;
   VoidCallback? onComplete;
@@ -70,7 +52,6 @@ class TtsService {
     _initialized = true;
 
     await _tts.setSpeechRate(speechRate);
-    await _tts.setPitch(pitch);
     await _tts.setVolume(1.0);
     await _tts.awaitSpeakCompletion(true);
     await _tts.awaitSynthCompletion(true);
@@ -78,142 +59,7 @@ class TtsService {
     _tts.setErrorHandler((msg) {
       debugPrint('TTS error: $msg');
     });
-
-    await loadVoices();
-    await applyVoiceSettings();
   }
-
-  /// 枚举系统 TTS 引擎支持的语言与声音。
-  Future<void> loadVoices() async {
-    try {
-      final langs = await _tts.getLanguages;
-      if (langs is List) {
-        availableLanguages = langs
-            .map((e) => e?.toString() ?? '')
-            .where((s) => s.isNotEmpty)
-            .toSet() // 去重:个别引擎会返回重复语言码,否则下拉断言崩溃
-            .toList()..sort();
-      }
-    } catch (e) {
-      debugPrint('getLanguages failed: $e');
-    }
-    try {
-      final voices = await _tts.getVoices;
-      if (voices is List) {
-        availableVoices = voices.map((v) {
-          if (v is Map) {
-            return VoiceInfo(
-              (v['name'] ?? '').toString(),
-              (v['locale'] ?? '').toString(),
-            );
-          }
-          return VoiceInfo(v?.toString() ?? '', '');
-        }).where((v) => v.name.isNotEmpty).toList();
-      }
-    } catch (e) {
-      debugPrint('getVoices failed: $e');
-    }
-  }
-
-  /// 把当前 voiceLanguage/voiceName/pitch 应用到引擎。
-  /// 导出前、朗读前均会调用,保证音色一致。
-  Future<void> applyVoiceSettings() async {
-    try {
-      if (voiceLanguage.isNotEmpty) {
-        await _tts.setLanguage(voiceLanguage);
-      }
-      if (voiceName != null) {
-        final locale = _localeForVoice(voiceName!) ?? voiceLanguage;
-        await _tts.setVoice({'name': voiceName!, 'locale': locale});
-      } else {
-        await _tts.clearVoice();
-      }
-      await _tts.setPitch(pitch);
-    } catch (e) {
-      debugPrint('applyVoiceSettings failed: $e');
-    }
-  }
-
-  String? _localeForVoice(String name) {
-    for (final v in availableVoices) {
-      if (v.name == name) return v.locale.isNotEmpty ? v.locale : null;
-    }
-    return null;
-  }
-
-  /// 应用快捷预设:设置语言、尽量按性别匹配声音、设置音调。
-  /// 返回是否成功匹配到指定性别的声音(用于 UI 提示)。
-  ///
-  /// - system: 重置为系统默认(清空语言/声音/音调)。
-  /// - 童声(gender=any 且 language 为空):保持当前声音,仅调高音调。
-  /// - 其它:设置语言并尝试匹配男/女声,匹配不到回退默认声音。
-  Future<bool> applyPreset(VoicePreset p) async {
-    if (p == VoicePreset.system) {
-      voiceLanguage = '';
-      voiceName = null;
-      pitch = 1.0;
-      await applyVoiceSettings();
-      return true;
-    }
-    if (p.language.isNotEmpty) voiceLanguage = p.language;
-    pitch = p.pitch;
-    bool matched = true;
-    if (p.gender != 'any') {
-      final found = _pickVoiceByGender(p.language, p.gender);
-      voiceName = found?.name;
-      matched = found != null;
-    }
-    // gender == 'any'(如童声):保持当前声音,仅靠 pitch 改变音色
-    await applyVoiceSettings();
-    return matched;
-  }
-
-  /// 按声音名启发式匹配性别(各引擎不统一,仅尽力而为)。
-  VoiceInfo? _pickVoiceByGender(String language, String gender) {
-    final base = language.split('-').first.toLowerCase();
-    final pool = availableVoices.where((v) {
-      final lb = v.locale.toLowerCase().replaceAll('_', '-').split('-').first;
-      return base.isEmpty || lb == base;
-    }).toList();
-    if (pool.isEmpty) return null;
-    final hints = gender == 'female' ? _femaleHints : _maleHints;
-    for (final h in hints) {
-      for (final v in pool) {
-        if (v.name.toLowerCase().contains(h)) return v;
-      }
-    }
-    return null;
-  }
-
-  /// 返回某语言下可用的具体声音列表(按声音名去重,避免下拉断言崩溃)。
-  List<VoiceInfo> voicesForLanguage(String language) {
-    final Iterable<VoiceInfo> pool;
-    if (language.isEmpty) {
-      pool = availableVoices;
-    } else {
-      final base = language.split('-').first.toLowerCase();
-      pool = availableVoices.where((v) {
-        final lb = v.locale.toLowerCase().replaceAll('_', '-').split('-').first;
-        return lb == base;
-      });
-    }
-    final seen = <String>{};
-    final result = <VoiceInfo>[];
-    for (final v in pool) {
-      if (seen.add(v.name)) result.add(v);
-    }
-    return result;
-  }
-
-  static const _femaleHints = [
-    'female', 'samantha', 'karen', 'tessa', 'fiona', 'victoria', 'moira',
-    'zira', 'huihui', 'yaoyao', 'xiaoxiao', 'xiaoyi', 'sunhi', 'yuna',
-    'tina', 'serena', 'amelie', 'anna', 'marie', 'sinji', 'laila',
-  ];
-  static const _maleHints = [
-    'male', 'david', 'mark', 'daniel', 'alex', 'george', 'james', 'rishi',
-    'arthur', 'oliver', 'thomas', 'kangkang', 'liangliang', 'yunfeng',
-  ];
 
   /// 设置文本;按当前模式切分为 token。
   void setText(String text) {
@@ -310,7 +156,6 @@ class TtsService {
     await init();
     if (_tokens.isEmpty) return;
     if (_currentIndex >= _tokens.length) _currentIndex = 0;
-    await applyVoiceSettings();
     await _tts.setSpeechRate(_effectiveRate);
     _setState(TtsState.playing);
     _runLoop();
@@ -321,7 +166,6 @@ class TtsService {
     if (index < 0 || index >= _tokens.length) return;
     _playToken++;
     await _tts.stop();
-    await applyVoiceSettings();
     await _tts.setSpeechRate(_effectiveRate);
     _currentIndex = index;
     _setState(TtsState.playing);
@@ -379,7 +223,7 @@ class TtsService {
     }
   }
 
-  /// 把一段文本离线合成到 [fullPath](WAV/PCM)。使用当前音色/音调,
+  /// 把一段文本离线合成到 [fullPath](WAV/PCM)。
   /// 语速用 [rate](null 时按当前模式的生效语速)。导出前会先停止朗读。
   /// 返回是否成功(文件存在且非空)。
   /// 单次调用受引擎最大输入长度限制,长文本请由上层分块后多次调用再拼接。
@@ -387,7 +231,6 @@ class TtsService {
     await init();
     _playToken++;
     await _tts.stop();
-    await applyVoiceSettings();
     await _tts.setSpeechRate(rate ?? _effectiveRate);
     try {
       final file = File(fullPath);
@@ -399,75 +242,6 @@ class TtsService {
       return await file.exists() && await file.length() > 44;
     } catch (e) {
       debugPrint('synthToFile error: $e');
-      return false;
-    }
-  }
-
-  /// 试听当前音色:用当前语言/声音/音调/语速朗读一句示例,不走切分循环。
-  Future<void> speakPreview(String text) async {
-    await init();
-    _playToken++;
-    await _tts.stop();
-    await applyVoiceSettings();
-    await _tts.setSpeechRate(_effectiveRate);
-    await _tts.speak(text);
-  }
-
-  /// 检查某语言是否有可用声音/语言数据。
-  bool hasVoiceFor(String language) {
-    if (language.isEmpty) return true;
-    final base = language.split('-').first.toLowerCase();
-    final langHit = availableLanguages.any((l) =>
-        l.toLowerCase().replaceAll('_', '-').split('-').first == base);
-    return langHit || voicesForLanguage(language).isNotEmpty;
-  }
-
-  /// 跳转系统"安装 TTS 语音数据"界面;逐级回退,尽量总能打开一个可用页面。
-  /// (Android 不允许第三方 App 把声音包打进 APK 给系统引擎加载,只能引导安装。)
-  ///
-  /// Android 11+ 因包可见性限制,部分设备/引擎不响应 INSTALL_TTS_DATA,
-  /// 故按以下顺序尝试,任一成功即返回:
-  /// 1. INSTALL_TTS_DATA —— 引擎自带的"安装语音数据"页
-  /// 2. 系统 TTS 设置页(com.android.settings.TTS_SETTINGS)—— 可在此选引擎/下载
-  /// 3. 应用商店 Google TTS 页(market://)
-  /// 4. Google TTS 网页(https://play.google.com)
-  Future<void> openInstallVoiceData() async {
-    // 1) 引擎的"安装语音数据"页
-    if (await _tryLaunch(AndroidIntent(
-      action: 'android.speech.tts.engine.INSTALL_TTS_DATA',
-    ))) {
-      return;
-    }
-    // 2) 系统"文字转语音(TTS)输出"设置页
-    if (await _tryLaunch(AndroidIntent(
-      action: 'com.android.settings.TTS_SETTINGS',
-    ))) {
-      return;
-    }
-    // 3) 应用商店的 Google TTS 详情页
-    if (await _tryLaunch(AndroidIntent(
-      action: 'android.intent.action.VIEW',
-      data: 'market://details?id=com.google.android.tts',
-    ))) {
-      return;
-    }
-    // 4) 兜底:用浏览器打开 Google TTS 网页
-    if (await _tryLaunch(AndroidIntent(
-      action: 'android.intent.action.VIEW',
-      data: 'https://play.google.com/store/apps/details?id=com.google.android.tts',
-    ))) {
-      return;
-    }
-    throw Exception('未找到可用的语音安装/设置入口,请到系统「设置 → 语言和输入 → 文字转语音」手动下载');
-  }
-
-  /// 尝试启动一个 intent,成功返回 true;任何异常(如 ActivityNotFound)返回 false。
-  Future<bool> _tryLaunch(AndroidIntent intent) async {
-    try {
-      await intent.launch();
-      return true;
-    } catch (e) {
-      debugPrint('launch intent failed (${intent.action}): $e');
       return false;
     }
   }

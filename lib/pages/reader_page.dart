@@ -70,9 +70,6 @@ class _ReaderPageState extends State<ReaderPage> {
     _tts.repeatGapSeconds = _settings.repeatGapSeconds;
     _tts.dictationRate = _settings.dictationRate;
     _tts.loop = _settings.loop;
-    _tts.voiceLanguage = _settings.voiceLanguage;
-    _tts.voiceName = _settings.voiceName;
-    _tts.pitch = _settings.pitch;
     _audioExport.customDir = _settings.customOutputDir;
     await _tts.init();
     _tts.setText(_doc.content); // 默认常规模式切句
@@ -133,30 +130,6 @@ class _ReaderPageState extends State<ReaderPage> {
       _currentToken = -1;
       _tokenKeys.clear();
     });
-  }
-
-  // ---------------- 音色(阅读页快捷切换,并持久化) ----------------
-
-  Future<void> _applyPresetInReader(VoicePreset p) async {
-    final matched = await _tts.applyPreset(p);
-    _settings.voicePreset = p;
-    _settings.voiceLanguage = _tts.voiceLanguage;
-    _settings.voiceName = _tts.voiceName;
-    _settings.pitch = _tts.pitch;
-    await _settingsService.save(_settings);
-    setState(() {});
-    if (!matched && p.gender != 'any') {
-      _toast('未找到明确的${p.gender == 'female' ? '女' : '男'}声,已用默认声音(可到设置选具体声音)');
-    }
-  }
-
-  Future<void> _changePitchInReader(double v) async {
-    _tts.pitch = v;
-    await _tts.applyVoiceSettings();
-    _settings.pitch = v;
-    _settings.voicePreset = VoicePreset.system;
-    await _settingsService.save(_settings);
-    setState(() {});
   }
 
   // ---------------- 音频导出 ----------------
@@ -328,100 +301,6 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
-  Future<void> _showVoiceSheet() async {
-    await _tts.init();
-    if (!mounted) return;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setSheet) {
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('音色',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                const Text('男声/女声取决于手机已安装的 TTS 声音;童声=高音调。',
-                    style: TextStyle(color: Colors.grey, fontSize: 12)),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final p in VoicePreset.values)
-                      ChoiceChip(
-                        label: Text(p.label),
-                        selected: _settings.voicePreset == p,
-                        onSelected: (_) async {
-                          await _applyPresetInReader(p);
-                          setSheet(() {});
-                        },
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    const Text('音调'),
-                    Expanded(
-                      child: Slider(
-                        value: _settings.pitch.clamp(0.5, 2.0),
-                        min: 0.5,
-                        max: 2.0,
-                        divisions: 15,
-                        label: '×${_settings.pitch.toStringAsFixed(1)}',
-                        onChanged: (v) async {
-                          await _changePitchInReader(v);
-                          setSheet(() {});
-                        },
-                      ),
-                    ),
-                    Text('×${_settings.pitch.toStringAsFixed(1)}',
-                        style: const TextStyle(color: Colors.grey)),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.download),
-                        label: const Text('下载更多声音'),
-                        onPressed: () async {
-                          try {
-                            await _tts.openInstallVoiceData();
-                          } catch (e) {
-                            _toast('无法打开安装页:$e');
-                          }
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.library_music),
-                        label: const Text('已生成音频'),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                          _showAudioFilesSheet();
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   String _basename(String path) => path.split('/').last;
 
   String _fileSize(File f) {
@@ -554,9 +433,9 @@ class _ReaderPageState extends State<ReaderPage> {
         actions: [
           if (!_editing) ...[
             IconButton(
-              icon: const Icon(Icons.graphic_eq),
-              tooltip: '音色',
-              onPressed: _exporting ? null : _showVoiceSheet,
+              icon: const Icon(Icons.library_music),
+              tooltip: '已生成音频',
+              onPressed: _exporting ? null : _showAudioFilesSheet,
             ),
             IconButton(
               icon: _exporting

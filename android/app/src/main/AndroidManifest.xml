@@ -38,29 +38,13 @@
             android:value="2" />
     </application>
 
-    <!-- 声明查询 TTS 引擎与相关跳转目标(Android 11+ 包可见性要求) -->
+    <!-- 声明查询 TTS 引擎(Android 11+ 包可见性要求) -->
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
-        </intent>
-        <!-- "下载更多声音":安装语音数据 / 系统 TTS 设置页 -->
-        <intent>
-            <action android:name="android.speech.tts.engine.INSTALL_TTS_DATA" />
-        </intent>
-        <intent>
-            <action android:name="com.android.settings.TTS_SETTINGS" />
-        </intent>
-        <!-- 跳应用商店 / 浏览器打开 Google TTS -->
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <data android:scheme="market" />
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <data android:scheme="https" />
         </intent>
     </queries>
 </manifest>
