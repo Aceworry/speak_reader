@@ -1,7 +1,7 @@
 name: speak_reader
 description: 语音朗读导入 App —— 拍照/扫描/Word/PDF/TXT 导入并语音朗读
 publish_to: 'none'
-version: 1.0.0+1
+version: 2.0.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -35,6 +35,12 @@ dependencies:
 
   # 网络请求(翻译 API)
   http: ^1.2.2
+
+  # 文件目录(音频导出输出路径)
+  path_provider: ^2.1.4
+
+  # 分享/打开生成的音频文件
+  share_plus: ^9.0.0
 
 dev_dependencies:
   flutter_lints: ^4.0.0

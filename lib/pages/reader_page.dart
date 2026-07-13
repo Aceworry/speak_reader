@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../models/document.dart';
+import '../services/audio_export_service.dart';
 import '../services/tts_service.dart';
 import '../services/storage_service.dart';
 import '../services/settings_service.dart';
@@ -19,6 +22,7 @@ class _ReaderPageState extends State<ReaderPage> {
   final _storage = StorageService();
   final _settingsService = SettingsService();
   final _translation = TranslationService();
+  final _audioExport = AudioExportService();
   final _scrollController = ScrollController();
 
   late Document _doc;
@@ -28,6 +32,7 @@ class _ReaderPageState extends State<ReaderPage> {
   TtsState _state = TtsState.stopped;
   bool _editing = false;
   bool _translating = false;
+  bool _exporting = false;
   String? _translated; // 译文(为 null 时不显示)
   late TextEditingController _editController;
 
@@ -61,9 +66,16 @@ class _ReaderPageState extends State<ReaderPage> {
     _tts.repeatCount = _settings.repeatCount;
     _tts.dictationGapSeconds = _settings.dictationGapSeconds;
     _tts.loop = _settings.loop;
+    _tts.voiceLanguage = _settings.voiceLanguage;
+    _tts.voiceName = _settings.voiceName;
+    _tts.pitch = _settings.pitch;
     await _tts.init();
     _tts.setText(_doc.content); // 默认常规模式切句
     if (mounted) setState(() {});
+    // 开启了"自动生成音频"时,后台静默导出一份(不阻断朗读)
+    if (_settings.autoExportAudio) {
+      _exportAudio(auto: true);
+    }
   }
 
   @override
@@ -88,6 +100,10 @@ class _ReaderPageState extends State<ReaderPage> {
   // ---------------- 朗读控制 ----------------
 
   Future<void> _togglePlay() async {
+    if (_exporting) {
+      _toast('音频生成中,请稍候');
+      return;
+    }
     switch (_state) {
       case TtsState.playing:
         await _tts.pause();
@@ -111,6 +127,295 @@ class _ReaderPageState extends State<ReaderPage> {
       _currentToken = -1;
       _tokenKeys.clear();
     });
+  }
+
+  // ---------------- 音色(阅读页快捷切换,并持久化) ----------------
+
+  Future<void> _applyPresetInReader(VoicePreset p) async {
+    final matched = await _tts.applyPreset(p);
+    _settings.voicePreset = p;
+    _settings.voiceLanguage = _tts.voiceLanguage;
+    _settings.voiceName = _tts.voiceName;
+    _settings.pitch = _tts.pitch;
+    await _settingsService.save(_settings);
+    setState(() {});
+    if (!matched && p.gender != 'any') {
+      _toast('未找到明确的${p.gender == 'female' ? '女' : '男'}声,已用默认声音(可到设置选具体声音)');
+    }
+  }
+
+  Future<void> _changePitchInReader(double v) async {
+    _tts.pitch = v;
+    await _tts.applyVoiceSettings();
+    _settings.pitch = v;
+    _settings.voicePreset = VoicePreset.system;
+    await _settingsService.save(_settings);
+    setState(() {});
+  }
+
+  // ---------------- 音频导出 ----------------
+
+  Future<void> _exportAudio({bool auto = false}) async {
+    if (_exporting) return;
+    if (_doc.content.trim().isEmpty) {
+      if (!auto) _toast('没有可朗读的内容');
+      return;
+    }
+    setState(() => _exporting = true);
+
+    final progress = ValueNotifier<double>(0.0);
+    if (!auto) {
+      // 手动导出:停止朗读并显示进度(不可被返回键关闭,避免误 pop 阅读页)
+      await _tts.stop();
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: const Text('正在生成音频…'),
+              content: ValueListenableBuilder<double>(
+                valueListenable: progress,
+                builder: (_, v, __) =>
+                    LinearProgressIndicator(value: v <= 0 ? null : v),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    try {
+      final path = await _audioExport.exportDocument(
+        _tts,
+        _doc.content,
+        baseName: _doc.title,
+        stableName: auto,
+        onProgress: (p) => progress.value = p,
+      );
+      if (!auto && mounted) Navigator.of(context).pop(); // 关进度框
+      if (auto) {
+        _toastWithAction('已生成音频:${_basename(path)}', '分享', () => _sharePath(path));
+      } else if (mounted) {
+        _showExportResult(path);
+      }
+    } catch (e) {
+      if (!auto && mounted) Navigator.of(context).pop();
+      if (auto) {
+        debugPrint('auto export failed: $e');
+      } else {
+        _toast('导出失败:$e');
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  void _showExportResult(String path) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('音频已生成 ✅'),
+        content: Text('文件:\n$path\n\n可用"分享/打开"发送到微信、文件管理等。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.share, size: 18),
+            label: const Text('分享/打开'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              _sharePath(path);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sharePath(String path) async {
+    try {
+      await _audioExport.shareFile(path);
+    } catch (e) {
+      _toast('分享失败:$e');
+    }
+  }
+
+  Future<void> _showAudioFilesSheet() async {
+    final files = await _audioExport.listFiles();
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setSheet) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('已生成的音频',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                if (files.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                        child: Text('还没有音频文件\n可在设置开启自动生成,或点导出按钮手动生成',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey))),
+                  )
+                else
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                        maxHeight: MediaQuery.of(context).size.height * 0.5),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: files.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, i) {
+                        final f = files[i];
+                        final name = _basename(f.path);
+                        return ListTile(
+                          leading: const Icon(Icons.audio_file),
+                          title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(_fileSize(f)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.share),
+                                tooltip: '分享/打开',
+                                onPressed: () => _sharePath(f.path),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline),
+                                tooltip: '删除',
+                                onPressed: () async {
+                                  await _audioExport.deleteFile(f.path);
+                                  files.removeAt(i);
+                                  setSheet(() {});
+                                },
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showVoiceSheet() async {
+    await _tts.init();
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setSheet) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('音色',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                const Text('男声/女声取决于手机已安装的 TTS 声音;童声=高音调。',
+                    style: TextStyle(color: Colors.grey, fontSize: 12)),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final p in VoicePreset.values)
+                      ChoiceChip(
+                        label: Text(p.label),
+                        selected: _settings.voicePreset == p,
+                        onSelected: (_) async {
+                          await _applyPresetInReader(p);
+                          setSheet(() {});
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('音调'),
+                    Expanded(
+                      child: Slider(
+                        value: _settings.pitch.clamp(0.5, 2.0),
+                        min: 0.5,
+                        max: 2.0,
+                        divisions: 15,
+                        label: '×${_settings.pitch.toStringAsFixed(1)}',
+                        onChanged: (v) async {
+                          await _changePitchInReader(v);
+                          setSheet(() {});
+                        },
+                      ),
+                    ),
+                    Text('×${_settings.pitch.toStringAsFixed(1)}',
+                        style: const TextStyle(color: Colors.grey)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.library_music),
+                    label: const Text('查看已生成的音频文件'),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _showAudioFilesSheet();
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  String _basename(String path) => path.split('/').last;
+
+  String _fileSize(File f) {
+    try {
+      final kb = f.lengthSync() / 1024;
+      return kb > 1024
+          ? '${(kb / 1024).toStringAsFixed(1)} MB'
+          : '${kb.toStringAsFixed(0)} KB';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  void _toastWithAction(String msg, String actionLabel, VoidCallback onAction) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(label: actionLabel, onPressed: onAction),
+      ),
+    );
   }
 
   // ---------------- 翻译 ----------------
@@ -149,6 +454,8 @@ class _ReaderPageState extends State<ReaderPage> {
       _tts.setText(_doc.content);
       await _storage.upsert(_doc);
       _toast('已保存');
+      // 内容变了,若开启了自动导出则重新生成音频
+      if (_settings.autoExportAudio) _exportAudio(auto: true);
     } else {
       await _tts.stop();
       _editController.text = _doc.content;
@@ -198,7 +505,22 @@ class _ReaderPageState extends State<ReaderPage> {
           child: Text(_doc.title, overflow: TextOverflow.ellipsis),
         ),
         actions: [
-          if (!_editing)
+          if (!_editing) ...[
+            IconButton(
+              icon: const Icon(Icons.graphic_eq),
+              tooltip: '音色',
+              onPressed: _exporting ? null : _showVoiceSheet,
+            ),
+            IconButton(
+              icon: _exporting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.download_for_offline),
+              tooltip: '导出音频',
+              onPressed: _exporting ? null : () => _exportAudio(auto: false),
+            ),
             IconButton(
               icon: _translating
                   ? const SizedBox(
@@ -209,6 +531,7 @@ class _ReaderPageState extends State<ReaderPage> {
               tooltip: '翻译',
               onPressed: _translating ? null : _translate,
             ),
+          ],
           IconButton(
             icon: Icon(_editing ? Icons.check : Icons.edit),
             tooltip: _editing ? '保存' : '编辑文字',
