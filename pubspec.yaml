@@ -1,7 +1,7 @@
 name: speak_reader
 description: 语音朗读导入 App —— 拍照/扫描/Word/PDF/TXT 导入并语音朗读
 publish_to: 'none'
-version: 2.1.0+1
+version: 2.2.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -47,8 +47,19 @@ dependencies:
   # 跳转系统 TTS 声音数据安装页(缺声音时引导下载)
   android_intent_plus: ^5.0.0
 
+  # 离线文字识别(Tesseract);训练数据(chi_sim/eng)由 CI 下载进 assets/tessdata
+  flutter_tesseract_ocr: ^0.4.30
+
+  # 离线翻译(Google ML Kit,首次需联网下载语言模型,之后离线)
+  google_mlkit_translation: ^0.13.0
+  google_mlkit_language_id: ^0.13.0
+
 dev_dependencies:
   flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
+
+  # Tesseract 训练数据目录(CI 会在打包前下载 chi_sim/eng.traineddata 到此)
+  assets:
+    - assets/tessdata/

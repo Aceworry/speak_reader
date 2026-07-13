@@ -65,6 +65,7 @@ class AudioExportService {
     required double rate,
     int repeatCount = 1,
     double gapSeconds = 0,
+    double repeatGapSeconds = 0,
     String? baseName,
     bool stableName = false,
     void Function(double progress)? onProgress,
@@ -82,7 +83,11 @@ class AudioExportService {
 
     if (dictation) {
       return _exportDictation(tts, clean, outPath, dir,
-          rate: rate, repeatCount: repeatCount, gapSeconds: gapSeconds, onProgress: onProgress);
+          rate: rate,
+          repeatCount: repeatCount,
+          gapSeconds: gapSeconds,
+          repeatGapSeconds: repeatGapSeconds,
+          onProgress: onProgress);
     }
     return _exportRegular(tts, clean, outPath, dir, rate: rate, onProgress: onProgress);
   }
@@ -131,6 +136,7 @@ class AudioExportService {
     required double rate,
     required int repeatCount,
     required double gapSeconds,
+    double repeatGapSeconds = 0,
     void Function(double)? onProgress,
   }) async {
     // 复用 TtsService 的听写切词逻辑,保证与朗读一致
@@ -151,23 +157,30 @@ class AudioExportService {
         onProgress?.call(0.1 + 0.7 * (i + 1) / tokens.length);
       }
 
-      // 用首个词的音频参数生成"书写停顿"静音 PCM
+      // 用首个词的音频参数生成"书写停顿"与"重复间隔"静音 PCM
       final firstInfo = _parseWav(await File(tokenWavs.first).readAsBytes());
       if (firstInfo == null) throw Exception('音频解析失败');
-      final silence = gapSeconds > 0
-          ? _silencePcm(firstInfo, gapSeconds)
+      final wordSilence =
+          gapSeconds > 0 ? _silencePcm(firstInfo, gapSeconds) : Uint8List(0);
+      final repeatSilence = repeatGapSeconds > 0
+          ? _silencePcm(firstInfo, repeatGapSeconds)
           : Uint8List(0);
 
-      // 组装 PCM 序列:每词 reps 遍,词间/重复间插停顿
+      // 组装 PCM 序列:每词 reps 遍,重复遍之间插重复间隔、词之间插书写停顿
       final pcm = BytesBuilder();
       for (var i = 0; i < tokens.length; i++) {
         final info = _parseWav(await File(tokenWavs[i]).readAsBytes());
         if (info == null) throw Exception('第 ${i + 1} 个词解析失败');
         for (var r = 0; r < reps; r++) {
           pcm.add(info.data);
-          if (silence.isNotEmpty && !(i == tokens.length - 1 && r == reps - 1)) {
-            pcm.add(silence);
+          // 同一词的重复遍之间:插重复间隔静音
+          if (repeatSilence.isNotEmpty && r < reps - 1) {
+            pcm.add(repeatSilence);
           }
+        }
+        // 词与词之间:插书写停顿静音(最后一个词后不插)
+        if (wordSilence.isNotEmpty && i < tokens.length - 1) {
+          pcm.add(wordSilence);
         }
         onProgress?.call(0.8 + 0.15 * (i + 1) / tokens.length);
       }

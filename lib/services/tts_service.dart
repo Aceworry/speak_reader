@@ -45,7 +45,7 @@ class TtsService {
   int repeatCount = 2;
   double dictationGapSeconds = 2.0;
   double dictationRate = 0.4; // 听写单词语速(部分单词读太快,独立于常规语速)
-  final double _repeatGapSeconds = 0.6;
+  double repeatGapSeconds = 0.6; // 同一词多遍重复之间的间隔(可配置)
   bool loop = false;
 
   // 音色参数
@@ -422,26 +422,53 @@ class TtsService {
     return langHit || voicesForLanguage(language).isNotEmpty;
   }
 
-  /// 跳转系统"安装 TTS 语音数据"界面;失败则跳应用商店 Google TTS 页。
+  /// 跳转系统"安装 TTS 语音数据"界面;逐级回退,尽量总能打开一个可用页面。
   /// (Android 不允许第三方 App 把声音包打进 APK 给系统引擎加载,只能引导安装。)
+  ///
+  /// Android 11+ 因包可见性限制,部分设备/引擎不响应 INSTALL_TTS_DATA,
+  /// 故按以下顺序尝试,任一成功即返回:
+  /// 1. INSTALL_TTS_DATA —— 引擎自带的"安装语音数据"页
+  /// 2. 系统 TTS 设置页(com.android.settings.TTS_SETTINGS)—— 可在此选引擎/下载
+  /// 3. 应用商店 Google TTS 页(market://)
+  /// 4. Google TTS 网页(https://play.google.com)
   Future<void> openInstallVoiceData() async {
+    // 1) 引擎的"安装语音数据"页
+    if (await _tryLaunch(AndroidIntent(
+      action: 'android.speech.tts.engine.INSTALL_TTS_DATA',
+    ))) {
+      return;
+    }
+    // 2) 系统"文字转语音(TTS)输出"设置页
+    if (await _tryLaunch(AndroidIntent(
+      action: 'com.android.settings.TTS_SETTINGS',
+    ))) {
+      return;
+    }
+    // 3) 应用商店的 Google TTS 详情页
+    if (await _tryLaunch(AndroidIntent(
+      action: 'android.intent.action.VIEW',
+      data: 'market://details?id=com.google.android.tts',
+    ))) {
+      return;
+    }
+    // 4) 兜底:用浏览器打开 Google TTS 网页
+    if (await _tryLaunch(AndroidIntent(
+      action: 'android.intent.action.VIEW',
+      data: 'https://play.google.com/store/apps/details?id=com.google.android.tts',
+    ))) {
+      return;
+    }
+    throw Exception('未找到可用的语音安装/设置入口,请到系统「设置 → 语言和输入 → 文字转语音」手动下载');
+  }
+
+  /// 尝试启动一个 intent,成功返回 true;任何异常(如 ActivityNotFound)返回 false。
+  Future<bool> _tryLaunch(AndroidIntent intent) async {
     try {
-      final intent = AndroidIntent(
-        action: 'android.speech.tts.engine.INSTALL_TTS_DATA',
-      );
       await intent.launch();
+      return true;
     } catch (e) {
-      debugPrint('INSTALL_TTS_DATA failed: $e');
-      try {
-        final market = AndroidIntent(
-          action: 'android.intent.action.VIEW',
-          data: 'market://details?id=com.google.android.tts',
-        );
-        await market.launch();
-      } catch (e2) {
-        debugPrint('open market failed: $e2');
-        rethrow;
-      }
+      debugPrint('launch intent failed (${intent.action}): $e');
+      return false;
     }
   }
 
@@ -460,7 +487,7 @@ class TtsService {
         await _tts.speak(_tokens[_currentIndex]);
         if (myToken != _playToken) return;
         if (r < reps - 1) {
-          await _sleep(_repeatGapSeconds);
+          await _sleep(repeatGapSeconds);
           if (myToken != _playToken) return;
         }
       }

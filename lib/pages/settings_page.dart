@@ -334,6 +334,40 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(height: 40),
 
+          // ================= 文字识别 / 翻译方式 =================
+          _sectionTitle('文字识别(OCR)方式'),
+          const Text(
+            '离线识别:完全本地运行、无需联网和 API,识别中英文;\n'
+            '在线视觉模型:调用上面配置的视觉大模型,联网、需 API,识别更准。',
+            style: TextStyle(color: Colors.grey, fontSize: 13),
+          ),
+          const SizedBox(height: 8),
+          for (final m in OcrMode.values)
+            RadioListTile<OcrMode>(
+              title: Text(m.label),
+              value: m,
+              groupValue: _s.ocrMode,
+              contentPadding: EdgeInsets.zero,
+              onChanged: (v) async {
+                if (v == null) return;
+                setState(() => _s.ocrMode = v);
+                await _persist();
+              },
+            ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            title: const Text('优先离线翻译'),
+            subtitle: const Text('用设备内 ML Kit 离线翻译(首次需联网下载语言模型);'
+                '不可用时自动回退到上面的在线 API'),
+            value: _s.preferOfflineTranslation,
+            onChanged: (v) async {
+              setState(() => _s.preferOfflineTranslation = v);
+              await _persist();
+            },
+            contentPadding: EdgeInsets.zero,
+          ),
+          const Divider(height: 40),
+
           _sectionTitle('朗读参数'),
           _slider(
             '常规模式·语速',
@@ -362,6 +396,17 @@ class _SettingsPageState extends State<SettingsPage> {
             1,
             10,
             (v) => setState(() => _s.repeatCount = v),
+          ),
+          _slider(
+            '每词重复之间的间隔(重复≥2遍时生效)',
+            _s.repeatGapSeconds,
+            0.0,
+            5.0,
+            (v) => setState(() {
+              _s.repeatGapSeconds = v;
+              _tts.repeatGapSeconds = v;
+            }),
+            '${_s.repeatGapSeconds.toStringAsFixed(1)} 秒',
           ),
           _slider(
             '听写·词间停顿(留书写时间)',

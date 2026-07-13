@@ -80,6 +80,25 @@ jobs:
           done < <(find "$CACHE" \( -path "*/android/build.gradle" -o -path "*/android/build.gradle.kts" \) -print0 2>/dev/null)
           echo "共修补 $patched 个插件构建文件"
 
+      - name: 下载 Tesseract 训练数据(离线 OCR 用,打进 assets)
+        run: |
+          mkdir -p assets/tessdata
+          BASE="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+          for L in chi_sim eng; do
+            echo "下载 $L.traineddata ..."
+            curl -fL --retry 3 --retry-delay 5 \
+              -o "assets/tessdata/$L.traineddata" \
+              "$BASE/$L.traineddata"
+          done
+          echo "===== assets/tessdata 内容 ====="
+          ls -lh assets/tessdata
+          # 训练数据必须存在且非空,否则离线识别不可用
+          for L in chi_sim eng; do
+            if [ ! -s "assets/tessdata/$L.traineddata" ]; then
+              echo "错误: assets/tessdata/$L.traineddata 缺失或为空"; exit 1
+            fi
+          done
+
       - name: 构建 Release APK
         run: flutter build apk --release
 

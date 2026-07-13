@@ -59,10 +59,14 @@ class AppSettings {
   // OCR 方式
   OcrMode ocrMode;
 
+  // 翻译:优先离线(ML Kit),不可用时自动回退在线 API
+  bool preferOfflineTranslation;
+
   // 朗读参数
   double wordGapSeconds; // 词间间隔(秒)
   int repeatCount; // 听写:每词重复遍数(1~10)
   double dictationGapSeconds; // 听写:词间停顿(秒,0.5~10)
+  double repeatGapSeconds; // 听写:同一词重复遍数之间的间隔(秒,0~5)
   bool loop; // 整篇读完是否循环
   double speechRate; // 常规模式语速 0.1~1.0
   double dictationRate; // 听写模式单词语速 0.1~1.0(部分单词读太快,独立调)
@@ -83,9 +87,11 @@ class AppSettings {
     this.apiKey = '',
     this.model = 'gpt-4o-mini',
     this.ocrMode = OcrMode.offline,
+    this.preferOfflineTranslation = true,
     this.wordGapSeconds = 0.3,
     this.repeatCount = 2,
     this.dictationGapSeconds = 2.0,
+    this.repeatGapSeconds = 0.6,
     this.loop = false,
     this.speechRate = 0.5,
     this.dictationRate = 0.4,
@@ -106,9 +112,11 @@ class SettingsService {
   static const _kApiKey = 'cfg_api_key';
   static const _kModel = 'cfg_model';
   static const _kOcrMode = 'cfg_ocr_mode';
+  static const _kPreferOfflineTr = 'cfg_prefer_offline_tr';
   static const _kWordGap = 'cfg_word_gap';
   static const _kRepeat = 'cfg_repeat';
   static const _kDictGap = 'cfg_dict_gap';
+  static const _kRepeatGap = 'cfg_repeat_gap';
   static const _kLoop = 'cfg_loop';
   static const _kRate = 'cfg_rate';
   static const _kDictRate = 'cfg_dict_rate';
@@ -128,9 +136,11 @@ class SettingsService {
       apiKey: p.getString(_kApiKey) ?? def.apiKey,
       model: p.getString(_kModel) ?? def.model,
       ocrMode: OcrMode.fromName(p.getString(_kOcrMode)),
+      preferOfflineTranslation: p.getBool(_kPreferOfflineTr) ?? def.preferOfflineTranslation,
       wordGapSeconds: p.getDouble(_kWordGap) ?? def.wordGapSeconds,
       repeatCount: p.getInt(_kRepeat) ?? def.repeatCount,
       dictationGapSeconds: p.getDouble(_kDictGap) ?? def.dictationGapSeconds,
+      repeatGapSeconds: p.getDouble(_kRepeatGap) ?? def.repeatGapSeconds,
       loop: p.getBool(_kLoop) ?? def.loop,
       speechRate: p.getDouble(_kRate) ?? def.speechRate,
       dictationRate: p.getDouble(_kDictRate) ?? def.dictationRate,
@@ -150,9 +160,11 @@ class SettingsService {
     await p.setString(_kApiKey, s.apiKey.trim());
     await p.setString(_kModel, s.model.trim());
     await p.setString(_kOcrMode, s.ocrMode.name);
+    await p.setBool(_kPreferOfflineTr, s.preferOfflineTranslation);
     await p.setDouble(_kWordGap, s.wordGapSeconds);
     await p.setInt(_kRepeat, s.repeatCount);
     await p.setDouble(_kDictGap, s.dictationGapSeconds);
+    await p.setDouble(_kRepeatGap, s.repeatGapSeconds);
     await p.setBool(_kLoop, s.loop);
     await p.setDouble(_kRate, s.speechRate);
     await p.setDouble(_kDictRate, s.dictationRate);

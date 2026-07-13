@@ -8,6 +8,7 @@ import '../services/tts_service.dart';
 import '../services/storage_service.dart';
 import '../services/settings_service.dart';
 import '../services/translation_service.dart';
+import '../services/offline_translation_service.dart';
 
 class ReaderPage extends StatefulWidget {
   final Document document;
@@ -22,6 +23,7 @@ class _ReaderPageState extends State<ReaderPage> {
   final _storage = StorageService();
   final _settingsService = SettingsService();
   final _translation = TranslationService();
+  final _offlineTranslation = OfflineTranslationService();
   final _audioExport = AudioExportService();
   final _scrollController = ScrollController();
 
@@ -65,6 +67,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _tts.speechRate = _settings.speechRate;
     _tts.repeatCount = _settings.repeatCount;
     _tts.dictationGapSeconds = _settings.dictationGapSeconds;
+    _tts.repeatGapSeconds = _settings.repeatGapSeconds;
     _tts.dictationRate = _settings.dictationRate;
     _tts.loop = _settings.loop;
     _tts.voiceLanguage = _settings.voiceLanguage;
@@ -83,6 +86,7 @@ class _ReaderPageState extends State<ReaderPage> {
   @override
   void dispose() {
     _tts.dispose();
+    _offlineTranslation.dispose();
     _scrollController.dispose();
     _editController.dispose();
     super.dispose();
@@ -197,6 +201,7 @@ class _ReaderPageState extends State<ReaderPage> {
         rate: dictation ? _tts.dictationRate : _tts.speechRate,
         repeatCount: _tts.repeatCount,
         gapSeconds: _tts.dictationGapSeconds,
+        repeatGapSeconds: _tts.repeatGapSeconds,
         baseName: _doc.title,
         stableName: auto,
         onProgress: (p) => progress.value = p,
@@ -445,19 +450,37 @@ class _ReaderPageState extends State<ReaderPage> {
   // ---------------- 翻译 ----------------
 
   Future<void> _translate() async {
-    if (!_settings.translationReady) {
-      _toast('请先到「设置」配置翻译 API');
-      return;
-    }
     final text = _doc.content.trim();
     if (text.isEmpty) {
       _toast('没有可翻译的内容');
       return;
     }
+    // 若既不优先离线、又没配在线 API,直接提示
+    if (!_settings.preferOfflineTranslation && !_settings.translationReady) {
+      _toast('请先到「设置」配置翻译 API,或开启「优先离线翻译」');
+      return;
+    }
     setState(() => _translating = true);
     try {
-      final r = await _translation.translate(text, settings: _settings);
-      setState(() => _translated = r);
+      String? result;
+      // 1) 优先离线(ML Kit),失败再回退在线
+      if (_settings.preferOfflineTranslation) {
+        try {
+          result = await _offlineTranslation.translate(text);
+        } catch (e) {
+          debugPrint('offline translate failed, fallback online: $e');
+          if (_settings.translationReady) {
+            _toast('离线翻译不可用,已改用在线翻译');
+            result = await _translation.translate(text, settings: _settings);
+          } else {
+            rethrow; // 没有在线兜底,把离线的错误抛给用户
+          }
+        }
+      } else {
+        // 2) 直接在线
+        result = await _translation.translate(text, settings: _settings);
+      }
+      setState(() => _translated = result);
     } catch (e) {
       _toast('翻译失败:$e');
     } finally {
@@ -745,6 +768,26 @@ class _ReaderPageState extends State<ReaderPage> {
                     onPressed: _tts.repeatCount < 10
                         ? () => setState(() => _tts.repeatCount++)
                         : null,
+                  ),
+                ],
+              ),
+            // 听写模式:每词重复之间的间隔(重复≥2遍时才有意义)
+            if (dictation && _tts.repeatCount > 1)
+              Row(
+                children: [
+                  const Icon(Icons.hourglass_bottom, size: 20),
+                  const SizedBox(width: 8),
+                  const Text('重复间隔'),
+                  Expanded(
+                    child: Slider(
+                      value: _tts.repeatGapSeconds.clamp(0.0, 5.0),
+                      min: 0.0,
+                      max: 5.0,
+                      divisions: 25,
+                      label: '${_tts.repeatGapSeconds.toStringAsFixed(1)}s',
+                      onChanged: (v) =>
+                          setState(() => _tts.repeatGapSeconds = v),
+                    ),
                   ),
                 ],
               ),
