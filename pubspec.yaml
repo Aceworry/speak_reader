@@ -40,7 +40,9 @@ dependencies:
   path_provider: ^2.1.4
 
   # 分享/打开生成的音频文件
-  share_plus: ^9.0.0
+  # 需 >=10.0.1 才依赖 web ^1.0.0(与 file_picker 兼容);
+  # 又需 <12.0.0 避免强制 AGP>=8.12/Kotlin2.2 拖累 CI。
+  share_plus: ^10.1.0
 
 dev_dependencies:
   flutter_lints: ^4.0.0
