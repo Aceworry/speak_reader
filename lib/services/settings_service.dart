@@ -61,10 +61,11 @@ class AppSettings {
 
   // 朗读参数
   double wordGapSeconds; // 词间间隔(秒)
-  int repeatCount; // 听写:每词重复遍数
-  double dictationGapSeconds; // 听写:词间停顿(秒)
+  int repeatCount; // 听写:每词重复遍数(1~10)
+  double dictationGapSeconds; // 听写:词间停顿(秒,0.5~10)
   bool loop; // 整篇读完是否循环
   double speechRate; // 常规模式语速 0.1~1.0
+  double dictationRate; // 听写模式单词语速 0.1~1.0(部分单词读太快,独立调)
 
   // 音色选择
   VoicePreset voicePreset; // 快捷预设
@@ -75,6 +76,7 @@ class AppSettings {
   // 音频导出
   bool autoExportAudio; // 后台自动生成音频文件
   AudioFormat audioFormat; // 导出格式
+  String? customOutputDir; // 自定义导出目录(null = 应用私有外部存储)
 
   AppSettings({
     this.baseUrl = 'https://api.openai.com/v1',
@@ -86,12 +88,14 @@ class AppSettings {
     this.dictationGapSeconds = 2.0,
     this.loop = false,
     this.speechRate = 0.5,
+    this.dictationRate = 0.4,
     this.voicePreset = VoicePreset.system,
     this.voiceLanguage = 'zh-CN',
     this.voiceName,
     this.pitch = 1.0,
     this.autoExportAudio = false,
     this.audioFormat = AudioFormat.wav,
+    this.customOutputDir,
   });
 
   bool get translationReady => baseUrl.trim().isNotEmpty && apiKey.trim().isNotEmpty;
@@ -107,12 +111,14 @@ class SettingsService {
   static const _kDictGap = 'cfg_dict_gap';
   static const _kLoop = 'cfg_loop';
   static const _kRate = 'cfg_rate';
+  static const _kDictRate = 'cfg_dict_rate';
   static const _kVoicePreset = 'cfg_voice_preset';
   static const _kVoiceLang = 'cfg_voice_lang';
   static const _kVoiceName = 'cfg_voice_name';
   static const _kPitch = 'cfg_pitch';
   static const _kAutoExport = 'cfg_auto_export';
   static const _kAudioFmt = 'cfg_audio_fmt';
+  static const _kOutDir = 'cfg_out_dir';
 
   Future<AppSettings> load() async {
     final p = await SharedPreferences.getInstance();
@@ -127,12 +133,14 @@ class SettingsService {
       dictationGapSeconds: p.getDouble(_kDictGap) ?? def.dictationGapSeconds,
       loop: p.getBool(_kLoop) ?? def.loop,
       speechRate: p.getDouble(_kRate) ?? def.speechRate,
+      dictationRate: p.getDouble(_kDictRate) ?? def.dictationRate,
       voicePreset: VoicePreset.fromName(p.getString(_kVoicePreset)),
       voiceLanguage: p.getString(_kVoiceLang) ?? def.voiceLanguage,
       voiceName: p.getString(_kVoiceName),
       pitch: p.getDouble(_kPitch) ?? def.pitch,
       autoExportAudio: p.getBool(_kAutoExport) ?? def.autoExportAudio,
       audioFormat: AudioFormat.fromName(p.getString(_kAudioFmt)),
+      customOutputDir: p.getString(_kOutDir),
     );
   }
 
@@ -147,6 +155,7 @@ class SettingsService {
     await p.setDouble(_kDictGap, s.dictationGapSeconds);
     await p.setBool(_kLoop, s.loop);
     await p.setDouble(_kRate, s.speechRate);
+    await p.setDouble(_kDictRate, s.dictationRate);
     await p.setString(_kVoicePreset, s.voicePreset.name);
     await p.setString(_kVoiceLang, s.voiceLanguage);
     if (s.voiceName == null) {
@@ -157,5 +166,10 @@ class SettingsService {
     await p.setDouble(_kPitch, s.pitch);
     await p.setBool(_kAutoExport, s.autoExportAudio);
     await p.setString(_kAudioFmt, s.audioFormat.name);
+    if (s.customOutputDir == null) {
+      await p.remove(_kOutDir);
+    } else {
+      await p.setString(_kOutDir, s.customOutputDir!);
+    }
   }
 }

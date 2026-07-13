@@ -6,19 +6,30 @@ import 'package:share_plus/share_plus.dart';
 
 import 'tts_service.dart';
 
-/// 音频导出服务:把文本离线合成为 WAV 文件并落盘到应用外部存储,
+/// 音频导出服务:把文本离线合成为 WAV 文件并落盘,
 /// 支持长文本分块合成 + PCM 拼接,以及列出/分享已生成的文件。
 ///
-/// - 输出目录:`<外部存储>/speak_reader_audio/`,无需运行时权限,
-///   可被系统文件管理器访问。
+/// 导出**按当前朗读模式**进行:
+/// - 常规模式:整段连读(分块合成再拼接),用常规语速。
+/// - 听写模式:逐词组合成 → 每词重复 N 遍 → 词间插入书写停顿(静音 PCM),
+///   用听写语速。音色/音调始终按当前设置。
+///
+/// - 输出目录:优先用用户自定义目录(可写时),否则 `<外部存储>/speak_reader_audio/`。
 /// - 格式:Android TTS `synthesizeToFile` 原生只产出 WAV(PCM),
-///   MP3 需额外转码依赖(会拖累 CI 构建),故 v2.0.0 仅导出 WAV。
+///   MP3 需额外转码依赖(会拖累 CI 构建),故仅导出 WAV。
 class AudioExportService {
   static const _dirName = 'speak_reader_audio';
   // 单次合成字符上限(留余量,Android TTS 上限约 4000 字符)
   static const _maxChunk = 2000;
 
+  String? customDir;
+
   Future<Directory> outputDir() async {
+    // 优先自定义目录(可写才用),否则回退应用私有外部存储
+    if (customDir != null && customDir!.trim().isNotEmpty) {
+      final d = Directory(customDir!);
+      if (await _isWritable(d)) return d;
+    }
     final base =
         await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
     final dir = Directory('${base.path}/$_dirName');
@@ -28,12 +39,32 @@ class AudioExportService {
 
   Future<String> outputDirPath() async => (await outputDir()).path;
 
-  /// 导出整篇文本为一个 WAV。长文本分块合成后拼接为单文件。
-  /// [onProgress] 回调 0~1 进度。[stableName]=true 时用固定文件名(自动导出覆盖,
-  /// 避免堆积);false 时带时间戳(手动导出,保留多版本)。成功返回路径,失败抛异常。
+  /// 校验目录可写(能创建并删除测试文件)。用于自定义目录选择后的验证。
+  Future<bool> isDirWritable(String path) async => _isWritable(Directory(path));
+
+  Future<bool> _isWritable(Directory d) async {
+    try {
+      if (!await d.exists()) await d.create(recursive: true);
+      final probe = File('${d.path}/.sr_write_test');
+      await probe.writeAsBytes(const [0]);
+      await probe.delete();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 导出整篇文本为一个 WAV,**按当前朗读模式**。
+  /// - [dictation]=false: 常规连读,语速用 [rate]。
+  /// - [dictation]=true: 逐词重复 [repeatCount] 遍、词间插 [gapSeconds] 秒静音,语速用 [rate]。
+  /// [stableName]=true 用固定文件名(自动导出覆盖),false 带时间戳(手动导出保留多版本)。
   Future<String> exportDocument(
     TtsService tts,
     String text, {
+    required bool dictation,
+    required double rate,
+    int repeatCount = 1,
+    double gapSeconds = 0,
     String? baseName,
     bool stableName = false,
     void Function(double progress)? onProgress,
@@ -44,25 +75,40 @@ class AudioExportService {
     final dir = await outputDir();
     final name =
         (baseName != null && baseName.trim().isNotEmpty) ? _sanitize(baseName) : '朗读';
+    final suffix = dictation ? '_听写' : '';
     final outPath = stableName
-        ? '${dir.path}/$name.wav'
-        : '${dir.path}/${name}_${_timestamp()}.wav';
+        ? '${dir.path}/$name$suffix.wav'
+        : '${dir.path}/$name${suffix}_${_timestamp()}.wav';
 
-    final chunks = _chunkText(clean, _maxChunk);
+    if (dictation) {
+      return _exportDictation(tts, clean, outPath, dir,
+          rate: rate, repeatCount: repeatCount, gapSeconds: gapSeconds, onProgress: onProgress);
+    }
+    return _exportRegular(tts, clean, outPath, dir, rate: rate, onProgress: onProgress);
+  }
+
+  // ---------- 常规模式:整段连读 ----------
+  Future<String> _exportRegular(
+    TtsService tts,
+    String text,
+    String outPath,
+    Directory dir, {
+    required double rate,
+    void Function(double)? onProgress,
+  }) async {
+    final chunks = _chunkText(text, _maxChunk);
     if (chunks.length == 1) {
       onProgress?.call(0.2);
-      final ok = await tts.synthToFile(chunks.first, outPath);
+      final ok = await tts.synthToFile(chunks.first, outPath, rate: rate);
       if (!ok) throw Exception('合成失败,当前 TTS 引擎可能不支持离线合成到文件');
       onProgress?.call(1.0);
       return outPath;
     }
-
-    // 多块:逐块合成到临时文件,再拼接 PCM
     final tempPaths = <String>[];
     try {
       for (var i = 0; i < chunks.length; i++) {
         final tmp = '${dir.path}/.tmp_chunk_$i.wav';
-        final ok = await tts.synthToFile(chunks[i], tmp);
+        final ok = await tts.synthToFile(chunks[i], tmp, rate: rate);
         if (!ok) throw Exception('第 ${i + 1} 段合成失败');
         tempPaths.add(tmp);
         onProgress?.call(0.1 + 0.8 * (i + 1) / chunks.length);
@@ -72,12 +118,65 @@ class AudioExportService {
       onProgress?.call(1.0);
       return outPath;
     } finally {
-      for (final p in tempPaths) {
-        try {
-          final f = File(p);
-          if (await f.exists()) await f.delete();
-        } catch (_) {}
+      await _cleanup(tempPaths);
+    }
+  }
+
+  // ---------- 听写模式:逐词重复 + 词间静音 ----------
+  Future<String> _exportDictation(
+    TtsService tts,
+    String text,
+    String outPath,
+    Directory dir, {
+    required double rate,
+    required int repeatCount,
+    required double gapSeconds,
+    void Function(double)? onProgress,
+  }) async {
+    // 复用 TtsService 的听写切词逻辑,保证与朗读一致
+    final tokens = tts.tokenizeForDictation(text);
+    if (tokens.isEmpty) throw Exception('没有可朗读的词');
+    final reps = repeatCount < 1 ? 1 : repeatCount;
+
+    final tempPaths = <String>[];
+    try {
+      // 逐词合成一份临时 WAV
+      final tokenWavs = <String>[];
+      for (var i = 0; i < tokens.length; i++) {
+        final tmp = '${dir.path}/.tmp_tok_$i.wav';
+        final ok = await tts.synthToFile(tokens[i], tmp, rate: rate);
+        if (!ok) throw Exception('第 ${i + 1} 个词合成失败');
+        tokenWavs.add(tmp);
+        tempPaths.add(tmp);
+        onProgress?.call(0.1 + 0.7 * (i + 1) / tokens.length);
       }
+
+      // 用首个词的音频参数生成"书写停顿"静音 PCM
+      final firstInfo = _parseWav(await File(tokenWavs.first).readAsBytes());
+      if (firstInfo == null) throw Exception('音频解析失败');
+      final silence = gapSeconds > 0
+          ? _silencePcm(firstInfo, gapSeconds)
+          : Uint8List(0);
+
+      // 组装 PCM 序列:每词 reps 遍,词间/重复间插停顿
+      final pcm = BytesBuilder();
+      for (var i = 0; i < tokens.length; i++) {
+        final info = _parseWav(await File(tokenWavs[i]).readAsBytes());
+        if (info == null) throw Exception('第 ${i + 1} 个词解析失败');
+        for (var r = 0; r < reps; r++) {
+          pcm.add(info.data);
+          if (silence.isNotEmpty && !(i == tokens.length - 1 && r == reps - 1)) {
+            pcm.add(silence);
+          }
+        }
+        onProgress?.call(0.8 + 0.15 * (i + 1) / tokens.length);
+      }
+
+      await _writeWav(outPath, firstInfo, pcm.toBytes());
+      onProgress?.call(1.0);
+      return outPath;
+    } finally {
+      await _cleanup(tempPaths);
     }
   }
 
@@ -113,6 +212,15 @@ class AudioExportService {
     if (await f.exists()) await f.delete();
   }
 
+  Future<void> _cleanup(List<String> paths) async {
+    for (final p in paths) {
+      try {
+        final f = File(p);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+  }
+
   // ---------------- 文本分块(尽量不切断句子) ----------------
 
   List<String> _chunkText(String text, int max) {
@@ -127,7 +235,6 @@ class AudioExportService {
       } else {
         buf += s;
       }
-      // 兜底:单句过长时硬切
       while (buf.length > max) {
         result.add(buf.substring(0, max));
         buf = buf.substring(max);
@@ -149,40 +256,43 @@ class AudioExportService {
     return '${d.year}${two(d.month)}${two(d.day)}_${two(d.hour)}${two(d.minute)}${two(d.second)}';
   }
 
-  // ---------------- WAV 拼接(解析 data 区,合并为单 WAV) ----------------
+  // ---------------- WAV 处理 ----------------
+
+  /// 生成一段静音 PCM(全 0),时长 [seconds],参数取自 [info]。
+  Uint8List _silencePcm(_WavInfo info, double seconds) {
+    final bytesPerSample = info.bitsPerSample ~/ 8;
+    final frames = (info.sampleRate * seconds).round();
+    final len = frames * info.channels * bytesPerSample;
+    return Uint8List(len); // 全 0 = 静音
+  }
 
   Future<bool> _concatWav(List<String> paths, String outPath) async {
     if (paths.isEmpty) return false;
-    int? sampleRate;
-    int? channels;
-    int? bitsPerSample;
+    _WavInfo? ref;
     final data = BytesBuilder();
-
     for (final p in paths) {
-      final bytes = await File(p).readAsBytes();
-      final info = _parseWav(bytes);
+      final info = _parseWav(await File(p).readAsBytes());
       if (info == null) return false;
-      sampleRate ??= info.sampleRate;
-      channels ??= info.channels;
-      bitsPerSample ??= info.bitsPerSample;
-      // 各块参数必须一致才能直接拼接 PCM
-      if (info.sampleRate != sampleRate ||
-          info.channels != channels ||
-          info.bitsPerSample != bitsPerSample) {
+      ref ??= info;
+      if (info.sampleRate != ref.sampleRate ||
+          info.channels != ref.channels ||
+          info.bitsPerSample != ref.bitsPerSample) {
         return false;
       }
       data.add(info.data);
     }
+    await _writeWav(outPath, ref!, data.toBytes());
+    return true;
+  }
 
+  Future<void> _writeWav(String outPath, _WavInfo fmt, Uint8List dataBytes) async {
     final out = File(outPath);
     final sink = out.openWrite();
     try {
-      final dataBytes = data.toBytes();
-      final sr = sampleRate!, ch = channels!, bps = bitsPerSample!;
+      final sr = fmt.sampleRate, ch = fmt.channels, bps = fmt.bitsPerSample;
       final byteRate = sr * ch * bps ~/ 8;
       final blockAlign = ch * bps ~/ 8;
       final dataSize = dataBytes.length;
-
       sink.add(_ascii('RIFF'));
       sink.add(_int32(36 + dataSize));
       sink.add(_ascii('WAVE'));
@@ -198,9 +308,6 @@ class AudioExportService {
       sink.add(_int32(dataSize));
       sink.add(dataBytes);
       await sink.flush();
-      return dataSize > 0;
-    } catch (_) {
-      return false;
     } finally {
       await sink.close();
     }
@@ -230,7 +337,6 @@ class AudioExportService {
           end > bytes.length ? bytes.length : end,
         );
       }
-      // WAV 块按字(2字节)对齐,奇数长度后有 1 字节填充
       offset = bodyStart + size + (size.isOdd ? 1 : 0);
       if (id == 'data' && data != null) break;
     }

@@ -1,6 +1,7 @@
 import 'dart:io' show File;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:android_intent_plus/android_intent.dart';
 import 'settings_service.dart';
 
 /// 朗读状态
@@ -43,6 +44,7 @@ class TtsService {
   // 听写模式参数
   int repeatCount = 2;
   double dictationGapSeconds = 2.0;
+  double dictationRate = 0.4; // 听写单词语速(部分单词读太快,独立于常规语速)
   final double _repeatGapSeconds = 0.6;
   bool loop = false;
 
@@ -225,6 +227,9 @@ class TtsService {
     setText(text);
   }
 
+  /// 供音频导出复用:按听写规则切词(与朗读一致)。
+  List<String> tokenizeForDictation(String text) => _tokenizeWords(text);
+
   // ---------- 常规模式:按句切分(第一版逻辑) ----------
   List<String> _splitSentences(String text) {
     final normalized = text.replaceAll('\r\n', '\n');
@@ -298,12 +303,15 @@ class TtsService {
 
   // ---------------- 播放控制 ----------------
 
+  /// 当前生效语速:听写模式用 dictationRate,常规模式用 speechRate。
+  double get _effectiveRate => dictationMode ? dictationRate : speechRate;
+
   Future<void> play() async {
     await init();
     if (_tokens.isEmpty) return;
     if (_currentIndex >= _tokens.length) _currentIndex = 0;
     await applyVoiceSettings();
-    await _tts.setSpeechRate(speechRate);
+    await _tts.setSpeechRate(_effectiveRate);
     _setState(TtsState.playing);
     _runLoop();
   }
@@ -314,7 +322,7 @@ class TtsService {
     _playToken++;
     await _tts.stop();
     await applyVoiceSettings();
-    await _tts.setSpeechRate(speechRate);
+    await _tts.setSpeechRate(_effectiveRate);
     _currentIndex = index;
     _setState(TtsState.playing);
     _runLoop();
@@ -329,7 +337,7 @@ class TtsService {
 
   Future<void> resume() async {
     if (_state != TtsState.paused) return;
-    await _tts.setSpeechRate(speechRate);
+    await _tts.setSpeechRate(_effectiveRate);
     _setState(TtsState.playing);
     _runLoop();
   }
@@ -357,15 +365,30 @@ class TtsService {
     }
   }
 
-  /// 把一段文本离线合成到 [fullPath](WAV/PCM)。使用当前音色/语速/音调。
-  /// 导出前会先停止朗读。返回是否成功(文件存在且非空)。
+  /// 实时调整听写模式单词语速(播放中从当前词重新生效)
+  Future<void> setDictationRate(double rate) async {
+    dictationRate = rate.clamp(0.1, 1.0);
+    await _tts.setSpeechRate(dictationRate);
+    if (_state == TtsState.playing && dictationMode) {
+      _playToken++;
+      final resumeIndex = _currentIndex;
+      await _tts.stop();
+      _currentIndex = resumeIndex;
+      _setState(TtsState.playing);
+      _runLoop();
+    }
+  }
+
+  /// 把一段文本离线合成到 [fullPath](WAV/PCM)。使用当前音色/音调,
+  /// 语速用 [rate](null 时按当前模式的生效语速)。导出前会先停止朗读。
+  /// 返回是否成功(文件存在且非空)。
   /// 单次调用受引擎最大输入长度限制,长文本请由上层分块后多次调用再拼接。
-  Future<bool> synthToFile(String text, String fullPath) async {
+  Future<bool> synthToFile(String text, String fullPath, {double? rate}) async {
     await init();
     _playToken++;
     await _tts.stop();
     await applyVoiceSettings();
-    await _tts.setSpeechRate(speechRate);
+    await _tts.setSpeechRate(rate ?? _effectiveRate);
     try {
       final file = File(fullPath);
       if (await file.exists()) await file.delete();
@@ -386,8 +409,40 @@ class TtsService {
     _playToken++;
     await _tts.stop();
     await applyVoiceSettings();
-    await _tts.setSpeechRate(speechRate);
+    await _tts.setSpeechRate(_effectiveRate);
     await _tts.speak(text);
+  }
+
+  /// 检查某语言是否有可用声音/语言数据。
+  bool hasVoiceFor(String language) {
+    if (language.isEmpty) return true;
+    final base = language.split('-').first.toLowerCase();
+    final langHit = availableLanguages.any((l) =>
+        l.toLowerCase().replaceAll('_', '-').split('-').first == base);
+    return langHit || voicesForLanguage(language).isNotEmpty;
+  }
+
+  /// 跳转系统"安装 TTS 语音数据"界面;失败则跳应用商店 Google TTS 页。
+  /// (Android 不允许第三方 App 把声音包打进 APK 给系统引擎加载,只能引导安装。)
+  Future<void> openInstallVoiceData() async {
+    try {
+      final intent = AndroidIntent(
+        action: 'android.speech.tts.engine.INSTALL_TTS_DATA',
+      );
+      await intent.launch();
+    } catch (e) {
+      debugPrint('INSTALL_TTS_DATA failed: $e');
+      try {
+        final market = AndroidIntent(
+          action: 'android.intent.action.VIEW',
+          data: 'market://details?id=com.google.android.tts',
+        );
+        await market.launch();
+      } catch (e2) {
+        debugPrint('open market failed: $e2');
+        rethrow;
+      }
+    }
   }
 
   /// 核心播放循环:常规=逐句连读;听写=逐词组、重复、停顿。

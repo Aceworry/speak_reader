@@ -65,10 +65,12 @@ class _ReaderPageState extends State<ReaderPage> {
     _tts.speechRate = _settings.speechRate;
     _tts.repeatCount = _settings.repeatCount;
     _tts.dictationGapSeconds = _settings.dictationGapSeconds;
+    _tts.dictationRate = _settings.dictationRate;
     _tts.loop = _settings.loop;
     _tts.voiceLanguage = _settings.voiceLanguage;
     _tts.voiceName = _settings.voiceName;
     _tts.pitch = _settings.pitch;
+    _audioExport.customDir = _settings.customOutputDir;
     await _tts.init();
     _tts.setText(_doc.content); // 默认常规模式切句
     if (mounted) setState(() {});
@@ -187,9 +189,14 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     try {
+      final dictation = _tts.dictationMode;
       final path = await _audioExport.exportDocument(
         _tts,
         _doc.content,
+        dictation: dictation,
+        rate: dictation ? _tts.dictationRate : _tts.speechRate,
+        repeatCount: _tts.repeatCount,
+        gapSeconds: _tts.dictationGapSeconds,
         baseName: _doc.title,
         stableName: auto,
         onProgress: (p) => progress.value = p,
@@ -373,16 +380,33 @@ class _ReaderPageState extends State<ReaderPage> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.library_music),
-                    label: const Text('查看已生成的音频文件'),
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      _showAudioFilesSheet();
-                    },
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.download),
+                        label: const Text('下载更多声音'),
+                        onPressed: () async {
+                          try {
+                            await _tts.openInstallVoiceData();
+                          } catch (e) {
+                            _toast('无法打开安装页:$e');
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.library_music),
+                        label: const Text('已生成音频'),
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _showAudioFilesSheet();
+                        },
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
               ],
@@ -659,10 +683,10 @@ class _ReaderPageState extends State<ReaderPage> {
                 Expanded(
                   child: dictation
                       ? Slider(
-                          value: _tts.dictationGapSeconds.clamp(0.5, 6.0),
+                          value: _tts.dictationGapSeconds.clamp(0.5, 10.0),
                           min: 0.5,
-                          max: 6.0,
-                          divisions: 11,
+                          max: 10.0,
+                          divisions: 19,
                           label:
                               '${_tts.dictationGapSeconds.toStringAsFixed(1)}s',
                           onChanged: (v) =>
@@ -680,6 +704,26 @@ class _ReaderPageState extends State<ReaderPage> {
                 ),
               ],
             ),
+            // 听写模式:单词语速滑块
+            if (dictation)
+              Row(
+                children: [
+                  const Icon(Icons.speed, size: 20),
+                  const SizedBox(width: 8),
+                  const Text('单词语速'),
+                  Expanded(
+                    child: Slider(
+                      value: _tts.dictationRate.clamp(0.1, 1.0),
+                      min: 0.1,
+                      max: 1.0,
+                      divisions: 9,
+                      label: '${(_tts.dictationRate * 100).round()}%',
+                      onChanged: (v) =>
+                          setState(() => _tts.setDictationRate(v)),
+                    ),
+                  ),
+                ],
+              ),
             // 听写模式:重复遍数
             if (dictation)
               Row(
@@ -698,7 +742,7 @@ class _ReaderPageState extends State<ReaderPage> {
                       style: const TextStyle(fontSize: 16)),
                   IconButton(
                     icon: const Icon(Icons.add_circle_outline),
-                    onPressed: _tts.repeatCount < 5
+                    onPressed: _tts.repeatCount < 10
                         ? () => setState(() => _tts.repeatCount++)
                         : null,
                   ),

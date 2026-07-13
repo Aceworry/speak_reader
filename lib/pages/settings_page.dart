@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../services/audio_export_service.dart';
 import '../services/settings_service.dart';
@@ -47,9 +48,11 @@ class _SettingsPageState extends State<SettingsPage> {
     _tts.voiceLanguage = s.voiceLanguage;
     _tts.voiceName = s.voiceName;
     _tts.pitch = s.pitch;
+    _tts.dictationRate = s.dictationRate;
     await _tts.init();
     await _tts.applyVoiceSettings();
     _languages = _tts.availableLanguages;
+    _audioExport.customDir = s.customOutputDir;
     try {
       _outputDir = await _audioExport.outputDirPath();
     } catch (_) {}
@@ -178,6 +181,45 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
+  Future<void> _installVoice() async {
+    try {
+      await _tts.openInstallVoiceData();
+      _toast('已打开系统语音数据安装页,请选择并下载所需语言');
+    } catch (e) {
+      _toast('无法打开安装页:$e');
+    }
+  }
+
+  Future<void> _pickOutputDir() async {
+    try {
+      final dir = await FilePicker.platform.getDirectoryPath();
+      if (dir == null) return; // 用户取消
+      final writable = await _audioExport.isDirWritable(dir);
+      if (!writable) {
+        _toast('该目录不可写(可能受系统限制),已保留原目录');
+        return;
+      }
+      setState(() => _s.customOutputDir = dir);
+      _audioExport.customDir = dir;
+      _outputDir = dir;
+      await _persist();
+      _toast('导出目录已设为:$dir');
+    } catch (e) {
+      _toast('选择目录失败:$e');
+    }
+  }
+
+  Future<void> _resetOutputDir() async {
+    setState(() => _s.customOutputDir = null);
+    _audioExport.customDir = null;
+    try {
+      _outputDir = await _audioExport.outputDirPath();
+    } catch (_) {}
+    await _persist();
+    setState(() {});
+    _toast('已恢复默认目录');
+  }
+
   Future<void> _testConnection() async {
     _s.baseUrl = _baseCtrl.text;
     _s.apiKey = _keyCtrl.text;
@@ -303,18 +345,29 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(height: 24),
           _sectionTitle('听写模式'),
+          _slider(
+            '听写·单词语速(部分单词读太快可调慢)',
+            _s.dictationRate,
+            0.1,
+            1.0,
+            (v) => setState(() {
+              _s.dictationRate = v;
+              _tts.dictationRate = v;
+            }),
+            '${(_s.dictationRate * 100).round()}%',
+          ),
           _stepper(
             '每个词重复遍数',
             _s.repeatCount,
             1,
-            5,
+            10,
             (v) => setState(() => _s.repeatCount = v),
           ),
           _slider(
             '听写·词间停顿(留书写时间)',
             _s.dictationGapSeconds,
             0.5,
-            6.0,
+            10.0,
             (v) => setState(() => _s.dictationGapSeconds = v),
             '${_s.dictationGapSeconds.toStringAsFixed(1)} 秒',
           ),
@@ -420,6 +473,11 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           Row(
             children: [
+              TextButton.icon(
+                onPressed: _installVoice,
+                icon: const Icon(Icons.download),
+                label: const Text('下载更多声音'),
+              ),
               const Spacer(),
               TextButton.icon(
                 onPressed: _voicesLoading ? null : _preview,
@@ -427,6 +485,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 label: Text(_previewing ? '停止试听' : '试听当前音色'),
               ),
             ],
+          ),
+          const Text(
+            '缺少中文/英文声音的手机:点"下载更多声音"跳转系统设置安装(安卓限制,'
+            '声音包由系统 TTS 引擎管理,App 无法内置)。',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
           ),
 
           // ================= 音频导出 =================
@@ -464,11 +527,31 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _pickOutputDir,
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('选择导出目录'),
+                ),
+              ),
+              if (_s.customOutputDir != null) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: _resetOutputDir,
+                  child: const Text('恢复默认'),
+                ),
+              ],
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
-            '输出目录:\n$_outputDir\n'
+            '当前输出目录:\n$_outputDir\n'
+            '${_s.customOutputDir != null ? "(自定义)" : "(默认:应用私有目录,无需权限)"}\n'
             '文件可用系统文件管理器查看;阅读页也可手动"导出音频"并分享。\n'
-            'MP3 暂不支持(Android 离线 TTS 仅产出 WAV)。',
+            '若所选目录不可写会自动回退默认目录。MP3 暂不支持(Android 离线 TTS 仅产出 WAV)。',
             style: const TextStyle(color: Colors.grey, fontSize: 13),
           ),
           const SizedBox(height: 24),
