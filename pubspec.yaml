@@ -48,7 +48,8 @@ dependencies:
   android_intent_plus: ^5.0.0
 
   # 离线文字识别(Google ML Kit,与离线翻译同源,免 key、离线)
-  google_mlkit_text_recognition: ^0.13.0
+  # 需 ^0.15.x 才与 translation/language_id ^0.13 共用 google_mlkit_commons ^0.11
+  google_mlkit_text_recognition: ^0.15.1
 
   # 离线翻译(Google ML Kit,首次需联网下载语言模型,之后离线)
   google_mlkit_translation: ^0.13.0
