@@ -2,7 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// OCR 识别方式
 enum OcrMode {
-  offline('离线识别 (Tesseract)'),
+  offline('离线识别 (ML Kit)'),
   vision('在线视觉模型');
 
   const OcrMode(this.label);

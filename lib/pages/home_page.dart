@@ -5,7 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/document.dart';
 import '../services/vision_ocr_service.dart';
-import '../services/tesseract_ocr_service.dart';
+import '../services/mlkit_ocr_service.dart';
 import '../services/import_service.dart';
 import '../services/storage_service.dart';
 import '../services/settings_service.dart';
@@ -23,7 +23,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _storage = StorageService();
   final _visionOcr = VisionOcrService();
-  final _tesseractOcr = TesseractOcrService();
+  final _mlkitOcr = MlkitOcrService();
   final _import = ImportService();
   final _settingsService = SettingsService();
   final _picker = ImagePicker();
@@ -39,6 +39,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _mlkitOcr.dispose();
     super.dispose();
   }
 
@@ -100,10 +101,19 @@ class _HomePageState extends State<HomePage> {
     _setLoading(true);
     try {
       final settings = await _settingsService.load();
-      final String text;
+      String? text;
       if (settings.ocrMode == OcrMode.offline) {
-        // 离线识别(Tesseract):无需 API,完全本地
-        text = await _tesseractOcr.recognizeFile(path);
+        // 离线识别(ML Kit):无需 API,完全本地;失败(如无 Google 服务)回退在线
+        try {
+          text = await _mlkitOcr.recognizeFile(path);
+        } catch (e) {
+          if (settings.translationReady) {
+            _toast('离线识别不可用,已改用在线视觉模型');
+            text = await _visionOcr.recognizeFile(path, settings: settings);
+          } else {
+            rethrow;
+          }
+        }
       } else {
         // 在线视觉大模型:需先配置支持图片输入的 API
         if (!settings.translationReady) {
@@ -113,7 +123,7 @@ class _HomePageState extends State<HomePage> {
         }
         text = await _visionOcr.recognizeFile(path, settings: settings);
       }
-      if (text.trim().isEmpty) {
+      if (text == null || text.trim().isEmpty) {
         _toast('未识别到文字,请换一张更清晰的图片');
         return;
       }
